@@ -2,7 +2,7 @@
 
 **Open Parametric Aircraft Design Suite** — a modern C++20 aircraft design, parametric geometry modeling, and aerodynamic/flight-simulation workbench.
 
-> See **[PLAN.md](PLAN.md)** for the full 6-phase roadmap (Geometry Expansion → Aero Solvers → SU2 CFD → Aircraft Analysis → Flight Sim) and **[ARCHITECTURE.md](ARCHITECTURE.md)** for the OOP class hierarchy and frame data flow.
+> See **[PLAN.md](PLAN.md)** for the full 6-phase roadmap (Geometry Expansion → Aero Solvers → Sizing & Stability → 6-DOF Mission Sequencer → SU2 CFD Validation) and **[ARCHITECTURE.md](ARCHITECTURE.md)** for the OOP class hierarchy and frame data flow.
 
 ---
 

@@ -21,7 +21,8 @@
 - **Landing Gear (`LandingGear`):** Struts, oleo pistons, single/dual wheels, optional wheel pants, rake/splay angles, and `XZ` symmetry for main gear.
 - **Part Duplication & Mirroring:** One-click `Duplicate` in the Model Tree.
 - **CAD / OpenVSP Importers:**
-  - **OpenVSP (`.vsp3`) XML Importer:** Parses OpenVSP `WingGeom`, `FuselageGeom`, `PodGeom`, and `PropellerGeom` natively into parametric OpenPADS components.
+  - **OpenVSP (`.vsp3`) XML Importer:** Parses OpenVSP `WingGeom`, `FuselageGeom`, `PodGeom`, `PropellerGeom`, and `Gear` bogies natively into parametric OpenPADS components (with `LenUnit` conversion).
+    - *Known Issues / Deferred Fix:* Geometry fidelity still has edge cases likely tied to OpenPADS's own lofting/geometry representation limitations (e.g., collapsed noses when tangent/end angles aren't modeled in PCHIP lofting, flat-looking propeller blades, and flat tail cross-sections on `GeneralFuse`/`RoundedRect` conversions) — revisit when upgrading fuselage/propeller lofting geometry solvers.
   - **Mesh Importer (`.stl` ASCII/Binary, `.obj`):** Automatic unit scaling (`m`, `mm`, `in`, `ft`), `Y-Up → Z-Up` axis conversion, origin centering, and full `Transform` / `GeometrySnap` / re-export support (`ImportedMesh`).
 
 ---

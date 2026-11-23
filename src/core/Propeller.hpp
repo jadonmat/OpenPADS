@@ -13,6 +13,15 @@ namespace opads {
 /// Parametric multi-blade propeller/rotor with spinner hub and radial twist/chord lofting.
 class Propeller : public Component {
 public:
+    /// Optional radial blade station for exact non-linear chord/twist/sweep/rake distributions.
+    struct BladeStation {
+        double radiusFrac{0.2};
+        double chord{0.15};
+        double twistDeg{20.0};
+        double sweepOffset{0.0};
+        double rakeOffset{0.0};
+    };
+
     Propeller(std::uint64_t id, std::string name = "Propeller");
 
     std::string getTypeName() const override;
@@ -52,6 +61,13 @@ public:
     bool getShowDiskRing() const noexcept;
     void setShowDiskRing(bool show) noexcept;
 
+    bool hasSpinner() const noexcept;
+    void setHasSpinner(bool enabled);
+
+    const std::vector<BladeStation>& getBladeCurve() const noexcept;
+    void setBladeCurve(std::vector<BladeStation> stations);
+    void clearBladeCurve();
+
     Airfoil& getBladeAirfoil() noexcept;
     const Airfoil& getBladeAirfoil() const noexcept;
 
@@ -74,6 +90,8 @@ private:
     int m_bladeCount{3};
     bool m_clockwise{true};
     bool m_showDiskRing{true};
+    bool m_hasSpinner{true};
+    std::vector<BladeStation> m_bladeCurve;
     Airfoil m_bladeAirfoil;
 };
 

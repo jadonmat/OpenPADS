@@ -69,6 +69,16 @@ const Parameter& FuselageSection::superEllipseN() const noexcept { return m_supe
 Parameter& FuselageSection::cornerRadiusFrac() noexcept { return m_cornerRadiusFrac; }
 const Parameter& FuselageSection::cornerRadiusFrac() const noexcept { return m_cornerRadiusFrac; }
 
+double FuselageSection::getBottomSuperEllipseN() const noexcept { return m_bottomSuperEllipseN; }
+void FuselageSection::setBottomSuperEllipseN(double n) noexcept {
+    m_bottomSuperEllipseN = (n > 0.0) ? std::clamp(n, 0.5, 12.0) : -1.0;
+}
+
+double FuselageSection::getMaxWidthLocFrac() const noexcept { return m_maxWidthLocFrac; }
+void FuselageSection::setMaxWidthLocFrac(double frac) noexcept {
+    m_maxWidthLocFrac = std::clamp(frac, -0.45, 0.45);
+}
+
 std::vector<glm::vec2> FuselageSection::sampleLoopYZ(int radialPoints) const {
     const int count = std::clamp(radialPoints, 8, 128);
     std::vector<glm::vec2> loop;
@@ -104,14 +114,21 @@ std::vector<glm::vec2> FuselageSection::sampleLoopYZ(int radialPoints) const {
         return loop;
     }
 
-    const float exp = (m_shape == CrossSectionShape::SuperEllipse)
-        ? (2.0f / m_superEllipseN.getFloat())
-        : 1.0f;
+    const float topN = m_superEllipseN.getFloat();
+    const float botN = (m_bottomSuperEllipseN > 0.0) ? static_cast<float>(m_bottomSuperEllipseN) : topN;
+    const float maxWidthShift = static_cast<float>(m_maxWidthLocFrac);
 
     for (int i = 0; i <= count; ++i) {
         const float angle = 2.0f * std::numbers::pi_v<float> * static_cast<float>(i) / static_cast<float>(count);
-        const float y = yc + ry * signedPow(std::cos(angle), exp);
-        const float z = zc + rz * signedPow(std::sin(angle), exp);
+        const float cosA = std::cos(angle);
+        const float sinA = std::sin(angle);
+        const float activeN = (sinA >= 0.0f) ? topN : botN;
+        const float exp = (m_shape == CrossSectionShape::SuperEllipse)
+            ? (2.0f / activeN)
+            : 1.0f;
+
+        const float y = yc + ry * signedPow(cosA, exp);
+        const float z = zc + rz * (signedPow(sinA, exp) + maxWidthShift * (cosA * cosA));
         loop.emplace_back(y, z);
     }
 

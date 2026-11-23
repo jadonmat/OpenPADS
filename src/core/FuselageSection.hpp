@@ -53,6 +53,14 @@ public:
     Parameter& cornerRadiusFrac() noexcept;
     const Parameter& cornerRadiusFrac() const noexcept;
 
+    /// Optional lower-half super-ellipse exponent (< 0 means match upper superEllipseN).
+    double getBottomSuperEllipseN() const noexcept;
+    void setBottomSuperEllipseN(double n) noexcept;
+
+    /// Vertical shift of widest point as fraction of half-height [-0.45, 0.45].
+    double getMaxWidthLocFrac() const noexcept;
+    void setMaxWidthLocFrac(double frac) noexcept;
+
     /// Generates a closed 2D loop in local (Y, Z) coordinates of size radialPoints + 1.
     std::vector<glm::vec2> sampleLoopYZ(int radialPoints) const;
 
@@ -65,6 +73,8 @@ private:
     Parameter m_zOffset;
     Parameter m_superEllipseN;
     Parameter m_cornerRadiusFrac;
+    double m_bottomSuperEllipseN{-1.0};
+    double m_maxWidthLocFrac{0.0};
 };
 
 } // namespace opads

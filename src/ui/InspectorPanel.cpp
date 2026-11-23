@@ -621,16 +621,33 @@ void InspectorPanel::renderPropellerEditor(Propeller& prop) {
             if (ImGui::Checkbox("Disk Ring", &disk)) {
                 prop.setShowDiskRing(disk);
             }
+            ImGui::SameLine();
+            bool spinner = prop.hasSpinner();
+            if (ImGui::Checkbox("Spinner", &spinner)) {
+                prop.setHasSpinner(spinner);
+            }
 
             bool changed = false;
             changed |= editParameterDrag(prop.diameter());
             changed |= editParameterDrag(prop.hubDiameter());
             changed |= editParameterDrag(prop.spinnerLength());
-            changed |= editParameterDrag(prop.rootChord());
-            changed |= editParameterDrag(prop.tipChord());
-            changed |= editParameterDrag(prop.collectivePitchDeg());
-            changed |= editParameterDrag(prop.washoutDeg());
-            changed |= editParameterDrag(prop.sweepDeg());
+            if (!prop.getBladeCurve().empty()) {
+                ImGui::TextDisabled("Imported radial blade curve (%zu stations)", prop.getBladeCurve().size());
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Use Linear")) {
+                    prop.clearBladeCurve();
+                }
+            }
+            bool linearEdited = false;
+            linearEdited |= editParameterDrag(prop.rootChord());
+            linearEdited |= editParameterDrag(prop.tipChord());
+            linearEdited |= editParameterDrag(prop.collectivePitchDeg());
+            linearEdited |= editParameterDrag(prop.washoutDeg());
+            linearEdited |= editParameterDrag(prop.sweepDeg());
+            if (linearEdited) {
+                prop.clearBladeCurve();
+                changed = true;
+            }
             if (changed) {
                 prop.markDirty();
             }

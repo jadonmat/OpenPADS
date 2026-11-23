@@ -534,3 +534,161 @@ TEST_CASE("OpenVspImporter parses .vsp3 XML and MeshImporter converts STL/OBJ wi
     std::filesystem::remove(tmpStl);
     std::filesystem::remove(tmpObj);
 }
+
+TEST_CASE("OpenVspImporter accurately imports nested Fuselage, Pod, Propeller PCurves, Gear, and LenUnit", "[core][import][vsp3]") {
+    constexpr const char* kNestedVsp3 = R"(
+<Vsp_Geometry>
+  <Vehicle>
+    <ParmContainer>
+      <STEPSettings><LenUnit Value="4.0"/></STEPSettings>
+    </ParmContainer>
+    <Geom>
+      <ParmContainer>
+        <Name Value="Fuse"/>
+        <Design><Length Value="87.0"/></Design>
+      </ParmContainer>
+      <GeomBase><TypeName>Fuselage</TypeName></GeomBase>
+      <FuselageGeom>
+        <XSecSurf>
+          <XSec>
+            <ParmContainer><XSec><RefLength Value="87.0"/><XLocPercent Value="0.0"/><ZLocPercent Value="-0.03"/></XSec></ParmContainer>
+            <XSec><XSecCurve><XSecCurve><Type>0</Type></XSecCurve><ParmContainer><XSecCurve/></ParmContainer></XSecCurve></XSec>
+          </XSec>
+          <XSec>
+            <ParmContainer><XSec><RefLength Value="87.0"/><XLocPercent Value="0.5"/><ZLocPercent Value="0.0"/></XSec></ParmContainer>
+            <XSec><XSecCurve><XSecCurve><Type>5</Type></XSecCurve><ParmContainer><XSecCurve><Width Value="8.75"/><Height Value="9.84"/><TopStr Value="1.50"/><BotStr Value="0.83"/><MaxWidthLoc Value="-0.30"/></XSecCurve></ParmContainer></XSecCurve></XSec>
+          </XSec>
+          <XSec>
+            <ParmContainer><XSec><RefLength Value="87.0"/><XLocPercent Value="1.0"/><ZLocPercent Value="0.05"/></XSec></ParmContainer>
+            <XSec><XSecCurve><XSecCurve><Type>1</Type></XSecCurve><ParmContainer><XSecCurve><Circle_Diameter Value="2.0"/></XSecCurve></ParmContainer></XSecCurve></XSec>
+          </XSec>
+        </XSecSurf>
+      </FuselageGeom>
+    </Geom>
+    <Geom>
+      <ParmContainer>
+        <Name Value="EnginePod"/>
+        <Design><Length Value="10.0"/><FineRatio Value="10.0"/></Design>
+      </ParmContainer>
+      <GeomBase><TypeName>Pod</TypeName></GeomBase>
+      <PodGeom/>
+    </Geom>
+    <Geom>
+      <ParmContainer>
+        <Name Value="Prop"/>
+        <XForm><X_Location Value="30.0"/><Y_Location Value="10.0"/><Z_Location Value="2.0"/></XForm>
+        <Design><Diameter Value="10.0"/><NumBlade Value="6.0"/><Feather Value="-10.0"/><ReverseFlag Value="0.0"/></Design>
+      </ParmContainer>
+      <GeomBase><TypeName>Propeller</TypeName></GeomBase>
+      <PropellerGeom>
+        <Chord><ParmContainer><Chord><r_0 Value="0.2"/><crd_0 Value="0.10"/><r_1 Value="0.6"/><crd_1 Value="0.22"/><r_2 Value="1.0"/><crd_2 Value="0.12"/></Chord></ParmContainer></Chord>
+        <Twist><ParmContainer><Twist><r_0 Value="0.2"/><tw_0 Value="45.0"/><r_1 Value="0.75"/><tw_1 Value="30.0"/><r_2 Value="1.0"/><tw_2 Value="22.0"/></Twist></ParmContainer></Twist>
+        <XSecSurf>
+          <XSec><ParmContainer><XSec><RadiusFrac Value="0.20"/></XSec></ParmContainer><XSec><XSecCurve><XSecCurve><Type>2</Type></XSecCurve></XSecCurve></XSec></XSec>
+          <XSec><ParmContainer><XSec><RadiusFrac Value="0.50"/></XSec></ParmContainer><XSec><XSecCurve><XSecCurve><Type>18</Type></XSecCurve><ParmContainer><XSecCurve><ThickChord Value="0.14"/><IdealCl Value="0.6"/></XSecCurve></ParmContainer></XSecCurve></XSec></XSec>
+        </XSecSurf>
+      </PropellerGeom>
+    </Geom>
+    <Geom>
+      <ParmContainer>
+        <Name Value="GearGeom"/>
+        <XForm><Z_Location Value="-7.0"/></XForm>
+        <Gear><m_ModelLenUnits Value="4.0"/></Gear>
+      </ParmContainer>
+      <GeomBase><TypeName>Gear</TypeName></GeomBase>
+      <Gear>
+        <Bogie_0>
+          <ParmContainer>
+            <Bogie><NumAcross Value="2.0"/><XContactPt Value="10.0"/><YContactPt Value="0.0"/><ZAboveGround Value="0.0"/><TravelZ Value="1.0"/><Symmetrical Value="0.0"/></Bogie>
+            <Tire><DiameterModel Value="2.0"/><WidthModel Value="0.6"/></Tire>
+          </ParmContainer>
+        </Bogie_0>
+      </Gear>
+    </Geom>
+  </Vehicle>
+</Vsp_Geometry>
+)";
+
+    opads::Aircraft ac;
+    REQUIRE(opads::OpenVspImporter::importFromString(ac, kNestedVsp3, "Nested"));
+    REQUIRE(ac.getComponents().size() == 4);
+
+    // 1. Fuselage in feet converted to meters: 87 ft * 0.3048 = 26.5176 m
+    const auto* fuse = dynamic_cast<const opads::Fuselage*>(ac.getComponents()[0].get());
+    REQUIRE(fuse != nullptr);
+    REQUIRE(fuse->length().getValue() == Catch::Approx(87.0 * 0.3048).margin(1e-3));
+    REQUIRE(fuse->getSectionCount() == 3);
+    REQUIRE(fuse->getSection(1).width().getValue() == Catch::Approx(8.75 * 0.3048).margin(1e-3));
+    REQUIRE(fuse->getSection(1).height().getValue() == Catch::Approx(9.84 * 0.3048).margin(1e-3));
+    REQUIRE(fuse->getSection(1).getShape() == opads::CrossSectionShape::SuperEllipse);
+    REQUIRE(fuse->getSection(1).getBottomSuperEllipseN() < fuse->getSection(1).superEllipseN().getValue());
+    REQUIRE(fuse->getSection(2).getShape() == opads::CrossSectionShape::Circle);
+    REQUIRE(fuse->getSection(2).width().getValue() == Catch::Approx(2.0 * 0.3048).margin(1e-3));
+
+    // 2. PodGeom: diameter = 2 * length / FineRatio (10 ft / 10 * 2 = 2 ft = 0.6096 m)
+    const auto* pod = dynamic_cast<const opads::Pod*>(ac.getComponents()[1].get());
+    REQUIRE(pod != nullptr);
+    REQUIRE(pod->length().getValue() == Catch::Approx(10.0 * 0.3048).margin(1e-3));
+    REQUIRE(pod->width().getValue() == Catch::Approx(2.0 * 0.3048).margin(1e-3));
+
+    // 3. Propeller: Diameter = 10 ft = 3.048 m, R = 1.524 m, 6 blades, curve preserved, no huge nose spinner
+    const auto* prop = dynamic_cast<const opads::Propeller*>(ac.getComponents()[2].get());
+    REQUIRE(prop != nullptr);
+    REQUIRE(prop->diameter().getValue() == Catch::Approx(10.0 * 0.3048).margin(1e-3));
+    REQUIRE(prop->getBladeCount() == 6);
+    REQUIRE_FALSE(prop->hasSpinner());
+    REQUIRE(prop->getBladeCurve().size() >= 10);
+    // Max chord 0.22 * R = 0.22 * 1.524 = 0.33528 m, pitch@0.75 = 30 - 10 = 20 deg
+    REQUIRE(prop->collectivePitchDeg().getValue() == Catch::Approx(20.0).margin(0.5));
+    REQUIRE(prop->hubDiameter().getValue() == Catch::Approx(0.20 * 10.0 * 0.3048).margin(1e-3));
+
+    // 4. LandingGear: imported from Bogie_0 with twin wheels, Diameter = 2 ft = 0.6096 m
+    const auto* gear = dynamic_cast<const opads::LandingGear*>(ac.getComponents()[3].get());
+    REQUIRE(gear != nullptr);
+    REQUIRE(gear->getWheelsPerStrut() == 2);
+    REQUIRE(gear->wheelDiameter().getValue() == Catch::Approx(2.0 * 0.3048).margin(1e-3));
+
+    // Round-trip save/load preserves asymmetric GeneralFuse section and Propeller bladeCurve
+    const std::string jsonSaved = opads::ProjectSerializer::saveToString(ac);
+    opads::Aircraft acReloaded;
+    REQUIRE(opads::ProjectSerializer::loadFromString(acReloaded, jsonSaved));
+    const auto* propReloaded = dynamic_cast<const opads::Propeller*>(acReloaded.getComponents()[2].get());
+    REQUIRE(propReloaded != nullptr);
+    REQUIRE(propReloaded->getBladeCurve().size() == prop->getBladeCurve().size());
+    REQUIRE_FALSE(propReloaded->hasSpinner());
+
+    // If the reference .vsp3 file exists on disk, verify every component imports cleanly at true scale
+    const std::filesystem::path refVsp =
+        R"(C:\PROJECTS\EVERGGREENLABS\Flight Sim Assets\Aircraft and related assets Models\Aircraft-Blender\OpenVSP\FinalConfiguration (2) (1).vsp3)";
+    if (std::filesystem::exists(refVsp)) {
+        opads::Aircraft realAc;
+        REQUIRE(opads::OpenVspImporter::importFromFile(realAc, refVsp));
+        REQUIRE(realAc.getComponents().size() >= 12);
+
+        auto findByName = [&](std::string_view name) -> const opads::Component* {
+            for (const auto& c : realAc.getComponents()) {
+                if (c->getName() == name) {
+                    return c.get();
+                }
+            }
+            return nullptr;
+        };
+
+        const opads::Component* mainFuse = findByName("Fuselage");
+        REQUIRE(mainFuse != nullptr);
+        const auto* mainFuseTyped = dynamic_cast<const opads::Fuselage*>(mainFuse);
+        REQUIRE(mainFuseTyped != nullptr);
+        REQUIRE(mainFuseTyped->length().getValue() == Catch::Approx(87.0 * 0.3048).margin(0.05));
+        REQUIRE(mainFuseTyped->getMaxWidth() == Catch::Approx(8.75 * 0.3048).margin(0.05));
+
+        const auto* leftEngine = dynamic_cast<const opads::Fuselage*>(findByName("LeftEngine"));
+        REQUIRE(leftEngine != nullptr);
+        REQUIRE(leftEngine->getMaxHeight() == Catch::Approx(3.75 * 0.3048).margin(0.05));
+
+        const auto* leftProp = dynamic_cast<const opads::Propeller*>(findByName("LeftProp"));
+        REQUIRE(leftProp != nullptr);
+        REQUIRE(leftProp->getBladeCount() == 8);
+        REQUIRE(leftProp->diameter().getValue() == Catch::Approx(13.48425 * 0.3048).margin(0.05));
+        REQUIRE(leftProp->getSolidity() > 0.35);
+    }
+}

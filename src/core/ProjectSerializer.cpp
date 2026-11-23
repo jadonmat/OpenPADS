@@ -189,6 +189,8 @@ json serializeFuselage(const Fuselage& fuse) {
             {"yOffset", sec.yOffset().getValue()},
             {"zOffset", sec.zOffset().getValue()},
             {"superEllipseN", sec.superEllipseN().getValue()},
+            {"bottomSuperEllipseN", sec.getBottomSuperEllipseN()},
+            {"maxWidthLocFrac", sec.getMaxWidthLocFrac()},
             {"cornerRadiusFrac", sec.cornerRadiusFrac().getValue()}
         });
     }
@@ -228,6 +230,17 @@ json serializePod(const Pod& pod) {
 }
 
 json serializePropeller(const Propeller& prop) {
+    json bladeCurve = json::array();
+    for (const Propeller::BladeStation& st : prop.getBladeCurve()) {
+        bladeCurve.push_back(json{
+            {"radiusFrac", st.radiusFrac},
+            {"chord", st.chord},
+            {"twistDeg", st.twistDeg},
+            {"sweepOffset", st.sweepOffset},
+            {"rakeOffset", st.rakeOffset}
+        });
+    }
+
     return json{
         {"type", "Propeller"},
         {"name", prop.getName()},
@@ -243,6 +256,8 @@ json serializePropeller(const Propeller& prop) {
         {"bladeCount", prop.getBladeCount()},
         {"clockwise", prop.isClockwise()},
         {"showDiskRing", prop.getShowDiskRing()},
+        {"hasSpinner", prop.hasSpinner()},
+        {"bladeCurve", std::move(bladeCurve)},
         {"airfoil", serializeAirfoil(prop.getBladeAirfoil())},
         {"transform", serializeTransform(prop.getTransform())}
     };
@@ -394,6 +409,8 @@ std::unique_ptr<Component> deserializeComponent(const json& cj, std::uint64_t id
                     sj.value("superEllipseN", 2.5)
                 );
                 sec.yOffset().setValue(sj.value("yOffset", 0.0));
+                sec.setBottomSuperEllipseN(sj.value("bottomSuperEllipseN", -1.0));
+                sec.setMaxWidthLocFrac(sj.value("maxWidthLocFrac", 0.0));
                 sec.cornerRadiusFrac().setValue(sj.value("cornerRadiusFrac", 0.25));
                 fuse->appendSection(std::move(sec));
             }
@@ -439,6 +456,20 @@ std::unique_ptr<Component> deserializeComponent(const json& cj, std::uint64_t id
         prop->setBladeCount(cj.value("bladeCount", 3));
         prop->setClockwise(cj.value("clockwise", true));
         prop->setShowDiskRing(cj.value("showDiskRing", true));
+        prop->setHasSpinner(cj.value("hasSpinner", true));
+        if (cj.contains("bladeCurve") && cj["bladeCurve"].is_array() && !cj["bladeCurve"].empty()) {
+            std::vector<Propeller::BladeStation> curve;
+            for (const auto& stJson : cj["bladeCurve"]) {
+                Propeller::BladeStation st;
+                st.radiusFrac = stJson.value("radiusFrac", 0.2);
+                st.chord = stJson.value("chord", 0.15);
+                st.twistDeg = stJson.value("twistDeg", 20.0);
+                st.sweepOffset = stJson.value("sweepOffset", 0.0);
+                st.rakeOffset = stJson.value("rakeOffset", 0.0);
+                curve.push_back(st);
+            }
+            prop->setBladeCurve(std::move(curve));
+        }
         if (cj.contains("airfoil")) {
             deserializeAirfoil(cj["airfoil"], prop->getBladeAirfoil());
         }

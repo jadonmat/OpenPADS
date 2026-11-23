@@ -66,10 +66,43 @@ void main() {
 }
 )";
 
+constexpr const char* kHighlightVertexShader = R"(#version 450 core
+layout (location = 0) in vec3 aPos;
+
+uniform mat4 uViewProj;
+uniform mat4 uModel;
+
+void main() {
+    gl_Position = uViewProj * uModel * vec4(aPos, 1.0);
+    gl_Position.z -= 0.0005 * gl_Position.w;
+}
+)";
+
+constexpr const char* kHighlightFragmentShader = R"(#version 450 core
+uniform vec3 uColor;
+out vec4 FragColor;
+
+void main() {
+    FragColor = vec4(uColor, 1.0);
+}
+)";
+
 } // namespace
 
 Viewport3D::~Viewport3D() {
+    releaseHighlightBuffers();
     releaseFramebuffer();
+}
+
+void Viewport3D::releaseHighlightBuffers() noexcept {
+    if (m_highlightVbo != 0) {
+        glDeleteBuffers(1, &m_highlightVbo);
+        m_highlightVbo = 0;
+    }
+    if (m_highlightVao != 0) {
+        glDeleteVertexArrays(1, &m_highlightVao);
+        m_highlightVao = 0;
+    }
 }
 
 void Viewport3D::releaseFramebuffer() noexcept {
@@ -94,6 +127,18 @@ bool Viewport3D::initialize() {
     if (!m_surfaceShader.compileFromSource(kSurfaceVertexShader, kSurfaceFragmentShader)) {
         return false;
     }
+    if (!m_highlightShader.compileFromSource(kHighlightVertexShader, kHighlightFragmentShader)) {
+        return false;
+    }
+
+    glGenVertexArrays(1, &m_highlightVao);
+    glGenBuffers(1, &m_highlightVbo);
+    glBindVertexArray(m_highlightVao);
+    glBindBuffer(GL_ARRAY_BUFFER, m_highlightVbo);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3), nullptr);
+    glBindVertexArray(0);
+
     resize(1280, 720);
     return true;
 }
@@ -209,11 +254,50 @@ void Viewport3D::render(Aircraft& aircraft) {
             glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
             glDisable(GL_POLYGON_OFFSET_LINE);
         }
+
+        if (isSelected) {
+            renderHighlightLoops(*component, viewProj);
+        }
     }
 
     m_gridRenderer.render(viewProj, camPos, m_camera.getTarget(), m_showGrid, m_showAxes);
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+void Viewport3D::renderHighlightLoops(const Component& component, const glm::mat4& viewProj) {
+    if (m_highlightVao == 0 || m_highlightVbo == 0) {
+        return;
+    }
+    const auto loops = component.getHighlightLoops();
+    if (loops.empty()) {
+        return;
+    }
+
+    m_highlightShader.bind();
+    m_highlightShader.setMat4("uViewProj", viewProj);
+    m_highlightShader.setMat4("uModel", component.getTransform().getMatrix());
+    m_highlightShader.setVec3("uColor", glm::vec3(1.0f, 0.78f, 0.18f));
+
+    glLineWidth(2.8f);
+    glBindVertexArray(m_highlightVao);
+    glBindBuffer(GL_ARRAY_BUFFER, m_highlightVbo);
+
+    for (const auto& loop : loops) {
+        if (loop.size() < 2) {
+            continue;
+        }
+        glBufferData(
+            GL_ARRAY_BUFFER,
+            static_cast<GLsizeiptr>(loop.size() * sizeof(glm::vec3)),
+            loop.data(),
+            GL_DYNAMIC_DRAW
+        );
+        glDrawArrays(GL_LINE_STRIP, 0, static_cast<GLsizei>(loop.size()));
+    }
+
+    glBindVertexArray(0);
+    glLineWidth(1.0f);
 }
 
 std::uint32_t Viewport3D::getColorTextureId() const noexcept {

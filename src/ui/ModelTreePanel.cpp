@@ -1,6 +1,10 @@
 #include "ui/ModelTreePanel.hpp"
 
+#include <string>
+
 #include <imgui.h>
+
+#include "core/Wing.hpp"
 
 namespace opads {
 
@@ -23,10 +27,23 @@ void ModelTreePanel::onRender() {
         ImGui::OpenPopup("AddComponentPopup");
     }
 
+    const auto selectedId = m_aircraft.getSelectedComponentId();
+    if (selectedId.has_value()) {
+        ImGui::SameLine();
+        if (ImGui::Button("Delete")) {
+            m_aircraft.removeComponent(*selectedId);
+        }
+    }
+
     if (ImGui::BeginPopup("AddComponentPopup")) {
         ImGui::TextDisabled("Component Types");
         ImGui::Separator();
-        ImGui::MenuItem("Wing (Milestone 2)", nullptr, false, false);
+        if (ImGui::MenuItem("Wing")) {
+            const std::uint64_t newId = m_aircraft.allocateComponentId();
+            const std::string wingName = "Wing " + std::to_string(newId);
+            m_aircraft.addComponent(std::make_unique<Wing>(newId, wingName));
+            m_aircraft.setSelectedComponentId(newId);
+        }
         ImGui::MenuItem("Fuselage (Milestone 4)", nullptr, false, false);
         ImGui::EndPopup();
     }
@@ -45,7 +62,7 @@ void ModelTreePanel::onRender() {
     }
 
     if (rootOpen) {
-        const auto selectedId = m_aircraft.getSelectedComponentId();
+        const auto currentSelected = m_aircraft.getSelectedComponentId();
         if (m_aircraft.getComponents().empty()) {
             ImGui::TextDisabled("No components yet");
         } else {
@@ -58,7 +75,7 @@ void ModelTreePanel::onRender() {
                 }
                 ImGui::SameLine();
 
-                const bool isSelected = selectedId.has_value() && *selectedId == component->getId();
+                const bool isSelected = currentSelected.has_value() && *currentSelected == component->getId();
                 const ImGuiTreeNodeFlags leafFlags =
                     ImGuiTreeNodeFlags_Leaf |
                     ImGuiTreeNodeFlags_NoTreePushOnOpen |

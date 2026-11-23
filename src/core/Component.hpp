@@ -2,6 +2,9 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
+
+#include <glm/vec3.hpp>
 
 #include "core/Mesh.hpp"
 #include "core/Transform.hpp"
@@ -37,6 +40,9 @@ public:
 
     /// Rebuilds the tessellated mesh when dirty.
     void ensureBuilt();
+
+    /// Optional local-space 3D polylines highlighted when this component is selected.
+    virtual std::vector<std::vector<glm::vec3>> getHighlightLoops() const;
 
     virtual std::string getTypeName() const = 0;
 

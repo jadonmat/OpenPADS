@@ -75,15 +75,24 @@ target_link_libraries(imgui PUBLIC glfw OpenGL::GL)
 add_library(OpenPADS_Core STATIC
     src/core/Transform.hpp
     src/core/Transform.cpp
+    src/core/Parameter.hpp
+    src/core/Parameter.cpp
     src/core/Mesh.hpp
     src/core/Mesh.cpp
+    src/core/Airfoil.hpp
+    src/core/Airfoil.cpp
     src/core/Component.hpp
     src/core/Component.cpp
+    src/core/WingSection.hpp
+    src/core/WingSection.cpp
+    src/core/Wing.hpp
+    src/core/Wing.cpp
     src/core/Aircraft.hpp
     src/core/Aircraft.cpp
 )
 target_include_directories(OpenPADS_Core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(OpenPADS_Core PUBLIC glm::glm)
+target_compile_definitions(OpenPADS_Core PUBLIC OPENPADS_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
 
 # ------------------------------------------------------------------------------
 # OpenPADS_Render (OpenGL 4.5 3D viewport backend)

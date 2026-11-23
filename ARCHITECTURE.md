@@ -50,8 +50,60 @@ classDiagram
             -bool m_dirty
             -Transform m_transform
             +ensureBuilt() void
+            +getHighlightLoops() vector~vector~vec3~~
             +getTypeName()* string
             #rebuildMesh()* void
+        }
+
+        class Wing {
+            -vector~WingSection~ m_sections
+            -SymmetryMode m_symmetry
+            -bool m_capTips
+            -int m_chordPoints
+            -size_t m_selectedCrossSection
+            +addSection() void
+            +removeSection(size_t idx) bool
+            +getPlanformArea() double
+            +getSpan() double
+            +getAspectRatio() double
+            +getMeanAerodynamicChord() double
+            +getWettedArea() double
+            #rebuildMesh() void
+        }
+
+        class WingSection {
+            -Parameter m_span
+            -Parameter m_rootChord
+            -Parameter m_tipChord
+            -Parameter m_sweepDeg
+            -Parameter m_dihedralDeg
+            -Parameter m_rootTwistDeg
+            -Parameter m_tipTwistDeg
+            -Airfoil m_rootAirfoil
+            -Airfoil m_tipAirfoil
+            +getArea() double
+            +getMeanAerodynamicChord() double
+        }
+
+        class Airfoil {
+            -AirfoilType m_type
+            -string m_name
+            -float m_thicknessScale
+            -float m_camberScale
+            -vector~vec2~ m_loop
+            +setNaca4(string_view code) void
+            +setNaca5(string_view code) void
+            +loadFromDatFile(path) bool
+            +getClosedLoop() vector~vec2~
+        }
+
+        class Parameter {
+            -string m_name
+            -string m_units
+            -double m_value
+            -double m_min
+            -double m_max
+            +setValue(double v) bool
         }
 
         class Transform {
@@ -76,6 +128,7 @@ classDiagram
             -OrbitCamera m_camera
             -GridRenderer m_gridRenderer
             -Shader m_surfaceShader
+            -Shader m_highlightShader
             -unordered_map~uint64, MeshBuffer~ m_componentBuffers
             +initialize() bool
             +resize(int w, int h) void
@@ -152,8 +205,12 @@ classDiagram
     }
 
     Aircraft *-- "0..*" Component : owns
+    Component <|-- Wing
     Component *-- "1" Transform : has
     Component *-- "1" Mesh : generates
+    Wing *-- "1..*" WingSection : owns
+    WingSection *-- "9" Parameter : parameters
+    WingSection *-- "2" Airfoil : root and tip sections
 
     Application *-- "1" Aircraft : owns
     Application *-- "1" Viewport3D : owns
@@ -163,16 +220,16 @@ classDiagram
     Panel <|-- InspectorPanel
     Panel <|-- ViewportPanel
 
-    ModelTreePanel --> Aircraft : edits selection/visibility
-    InspectorPanel --> Aircraft : edits properties
+    ModelTreePanel --> Aircraft : add/remove/select
+    InspectorPanel --> Aircraft : edits Wing/CrossSections/Airfoils
     ViewportPanel --> Viewport3D : displays FBO & forwards input
     ViewportPanel --> Aircraft : passes to render
 
     Viewport3D *-- "1" OrbitCamera : owns
     Viewport3D *-- "1" GridRenderer : owns
-    Viewport3D *-- "1" Shader : surface shader
+    Viewport3D *-- "2" Shader : surface & highlight shaders
     Viewport3D *-- "0..*" MeshBuffer : caches by component ID
-    Viewport3D ..> Aircraft : reads dirty state & meshes
+    Viewport3D ..> Aircraft : reads dirty state, meshes & highlight loops
     GridRenderer *-- "2" Shader : grid & axis shaders
 ```
 
@@ -183,11 +240,11 @@ classDiagram
 ```mermaid
 flowchart TD
     Poll["GLFW Poll Events & New ImGui Frame"] --> Dock["Application renders Dockspace & MenuBar"]
-    Dock --> Tree["ModelTreePanel updates selection & visibility"]
-    Dock --> Insp["InspectorPanel edits Transform / parameters -> markDirty()"]
+    Dock --> Tree["ModelTreePanel adds/removes/selects Wing & toggles visibility"]
+    Dock --> Insp["InspectorPanel edits Wing bays, XSecs, Airfoil, or Transform -> markDirty()"]
     Dock --> VP["ViewportPanel resizes & calls Viewport3D::render(aircraft)"]
     VP --> Sync["Viewport3D::syncComponentMeshes() rebuilds dirty Components & uploads MeshBuffers"]
-    Sync --> Draw["Viewport3D renders Components + GridRenderer into offscreen FBO"]
+    Sync --> Draw["Viewport3D renders Components, Cross-Section Highlight Loops & GridRenderer into FBO"]
     Draw --> Display["ViewportPanel draws FBO texture via ImGui::Image & handles camera drag/zoom"]
     Display --> Present["ImGui::Render & glfwSwapBuffers"]
 ```
@@ -199,18 +256,23 @@ flowchart TD
 | Module | File | Responsibility |
 | :--- | :--- | :--- |
 | **Core** | `src/core/Transform.hpp/.cpp` | Aerospace Z-up position, Euler rotation, scale, and model matrix |
+| **Core** | `src/core/Parameter.hpp/.cpp` | Bounded engineering parameter with units, clamping, and change tracking |
 | **Core** | `src/core/Mesh.hpp/.cpp` | Indexed triangle mesh (`Vertex` positions + normals) |
+| **Core** | `src/core/Airfoil.hpp/.cpp` | NACA 4/5-digit generators, Selig/Lednicer `.dat` parser, and modifiers |
 | **Core** | `src/core/Component.hpp/.cpp` | Abstract base class for aircraft components (`Wing`, `Fuselage`, etc.) |
+| **Core** | `src/core/WingSection.hpp/.cpp` | Spanwise trapezoidal bay with chained root/tip airfoils & aero formulas |
+| **Core** | `src/core/Wing.hpp/.cpp` | Multi-section lofted wing mesh, `XZ` symmetry, tip caps, and highlight rings |
 | **Core** | `src/core/Aircraft.hpp/.cpp` | Root container owning components, IDs, selection, and dirty rebuilds |
 | **Render** | `src/render/OrbitCamera.hpp/.cpp` | Spherical orbit/pan/zoom camera and CAD view presets |
 | **Render** | `src/render/Shader.hpp/.cpp` | RAII OpenGL shader compiler and uniform helpers |
 | **Render** | `src/render/MeshBuffer.hpp/.cpp` | GPU `VAO`/`VBO`/`EBO` buffer lifecycle for `Mesh` |
 | **Render** | `src/render/GridRenderer.hpp/.cpp` | Procedural anti-aliased `Z = 0` grid and origin RGB triad |
-| **Render** | `src/render/Viewport3D.hpp/.cpp` | Offscreen FBO renderer, lighting shader, and mesh cache |
+| **Render** | `src/render/Viewport3D.hpp/.cpp` | Offscreen FBO renderer, lighting shader, highlight loop overlay, and mesh cache |
 | **UI** | `src/ui/Panel.hpp/.cpp` | Abstract base class for dockable UI panels |
-| **UI** | `src/ui/ModelTreePanel.hpp/.cpp` | Hierarchy outliner for `Aircraft` and `Component` items |
-| **UI** | `src/ui/InspectorPanel.hpp/.cpp` | Property editor for selected aircraft/component transforms & metrics |
+| **UI** | `src/ui/ModelTreePanel.hpp/.cpp` | Hierarchy outliner for adding, removing, and selecting components |
+| **UI** | `src/ui/InspectorPanel.hpp/.cpp` | Unified tabbed editor for Wing bays, Cross Sections, Airfoils & Transform |
 | **UI** | `src/ui/ViewportPanel.hpp/.cpp` | Hosts `Viewport3D` image, view toolbar, and mouse camera controls |
 | **UI** | `src/ui/Application.hpp/.cpp` | Window, OpenGL context, Dear ImGui dockspace, theme, and main loop |
+| **Data** | `data/airfoils/*.dat` | Starter UIUC airfoil coordinate library (`clarky`, `sc20412`, `s1223`, etc.) |
 | **App** | `src/main.cpp` | Program entry point |
-| **Tests** | `tests/CoreTests.cpp` | Catch2 unit tests for `Transform`, `Component`, and `Aircraft` |
+| **Tests** | `tests/CoreTests.cpp` | Catch2 unit tests for `Transform`, `Parameter`, `Airfoil`, `Wing`, and `Aircraft` |

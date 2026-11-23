@@ -58,4 +58,8 @@ void Component::ensureBuilt() {
     m_dirty = false;
 }
 
+std::vector<std::vector<glm::vec3>> Component::getHighlightLoops() const {
+    return {};
+}
+
 } // namespace opads

@@ -48,17 +48,22 @@ public:
 
 private:
     void releaseFramebuffer() noexcept;
+    void releaseHighlightBuffers() noexcept;
     void syncComponentMeshes(Aircraft& aircraft);
+    void renderHighlightLoops(const Component& component, const glm::mat4& viewProj);
 
     std::uint32_t m_fbo{0};
     std::uint32_t m_colorTexture{0};
     std::uint32_t m_depthRbo{0};
+    std::uint32_t m_highlightVao{0};
+    std::uint32_t m_highlightVbo{0};
     int m_width{1};
     int m_height{1};
 
     OrbitCamera m_camera;
     GridRenderer m_gridRenderer;
     Shader m_surfaceShader;
+    Shader m_highlightShader;
     std::unordered_map<std::uint64_t, MeshBuffer> m_componentBuffers;
 
     RenderMode m_renderMode{RenderMode::ShadedWireframe};

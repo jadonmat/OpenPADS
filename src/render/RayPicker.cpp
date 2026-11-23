@@ -49,12 +49,19 @@ bool RayPicker::intersectTriangle(
     return true;
 }
 
-PickResult RayPicker::pickAircraft(const Ray& worldRay, const Aircraft& aircraft) {
+PickResult RayPicker::pickAircraft(
+    const Ray& worldRay,
+    const Aircraft& aircraft,
+    std::optional<std::uint64_t> excludeComponentId
+) {
     PickResult best;
     best.distance = std::numeric_limits<float>::max();
 
     for (const auto& component : aircraft.getComponents()) {
         if (!component->isVisible()) {
+            continue;
+        }
+        if (excludeComponentId.has_value() && component->getId() == *excludeComponentId) {
             continue;
         }
         const Mesh& mesh = component->getMesh();

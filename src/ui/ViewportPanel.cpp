@@ -76,6 +76,19 @@ void ViewportPanel::renderToolbar() {
     ImGui::SetCursorPos(ImVec2(8.0f, 5.0f));
 
     Gizmo& gizmo = m_viewport.getGizmo();
+    const GizmoTarget target = gizmo.getTarget();
+    if (toolbarModeButton("Part", target == GizmoTarget::Part)) {
+        gizmo.setTarget(GizmoTarget::Part);
+    }
+    ImGui::SameLine();
+    if (toolbarModeButton("XSec (Tab)", target == GizmoTarget::CrossSection)) {
+        gizmo.setTarget(GizmoTarget::CrossSection);
+    }
+
+    ImGui::SameLine();
+    ImGui::TextDisabled("|");
+    ImGui::SameLine();
+
     const GizmoMode mode = gizmo.getMode();
     if (toolbarModeButton("Select (Q)", mode == GizmoMode::Select)) {
         gizmo.setMode(GizmoMode::Select);
@@ -85,8 +98,21 @@ void ViewportPanel::renderToolbar() {
         gizmo.setMode(GizmoMode::Translate);
     }
     ImGui::SameLine();
-    if (toolbarModeButton("XSec (E)", mode == GizmoMode::SectionHandle)) {
-        gizmo.setMode(GizmoMode::SectionHandle);
+    if (toolbarModeButton("Rotate (R)", mode == GizmoMode::Rotate)) {
+        gizmo.setMode(GizmoMode::Rotate);
+    }
+    ImGui::SameLine();
+    if (toolbarModeButton("Scale (S)", mode == GizmoMode::Scale)) {
+        gizmo.setMode(GizmoMode::Scale);
+    }
+
+    ImGui::SameLine();
+    bool surfSnap = gizmo.isSurfaceSnapEnabled();
+    if (ImGui::Checkbox("Snap", &surfSnap)) {
+        gizmo.setSurfaceSnapEnabled(surfSnap);
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Surface Snap: drag center handle or axes onto another part's surface");
     }
 
     ImGui::SameLine();
@@ -150,12 +176,19 @@ void ViewportPanel::handleViewportInput(bool imageHovered, const glm::vec2& imag
     Gizmo& gizmo = m_viewport.getGizmo();
 
     if (imageHovered && !io.WantTextInput) {
+        if (ImGui::IsKeyPressed(ImGuiKey_Tab)) {
+            gizmo.setTarget(
+                gizmo.getTarget() == GizmoTarget::Part ? GizmoTarget::CrossSection : GizmoTarget::Part
+            );
+        }
         if (ImGui::IsKeyPressed(ImGuiKey_Q)) {
             gizmo.setMode(GizmoMode::Select);
         } else if (ImGui::IsKeyPressed(ImGuiKey_W)) {
             gizmo.setMode(GizmoMode::Translate);
-        } else if (ImGui::IsKeyPressed(ImGuiKey_E)) {
-            gizmo.setMode(GizmoMode::SectionHandle);
+        } else if (ImGui::IsKeyPressed(ImGuiKey_R)) {
+            gizmo.setMode(GizmoMode::Rotate);
+        } else if (ImGui::IsKeyPressed(ImGuiKey_S)) {
+            gizmo.setMode(GizmoMode::Scale);
         }
     }
 
@@ -170,7 +203,7 @@ void ViewportPanel::handleViewportInput(bool imageHovered, const glm::vec2& imag
 
     if (gizmo.isDragging()) {
         if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-            gizmo.updateDrag(ray, m_aircraft);
+            gizmo.updateDrag(ray, m_aircraft, cam);
         } else {
             gizmo.endDrag();
         }

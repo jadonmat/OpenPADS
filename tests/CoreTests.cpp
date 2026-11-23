@@ -307,3 +307,48 @@ TEST_CASE("ProjectSerializer round-trips Aircraft and MeshExporter writes STL an
     std::filesystem::remove(tmpStl);
     std::filesystem::remove(tmpObj);
 }
+
+TEST_CASE("RayPicker exclusion and Gizmo CrossSection targeting work for surface snapping", "[render][gizmo]") {
+    opads::Aircraft aircraft("Snap Test");
+    const auto fuseId = aircraft.allocateComponentId();
+    auto fuse = std::make_unique<opads::Fuselage>(fuseId, "Fuse");
+    fuse->clearSections();
+    fuse->length().setValue(10.0);
+    fuse->setSmoothLoft(false);
+    fuse->appendSection(opads::FuselageSection(opads::CrossSectionShape::Circle, 0.0, 2.0, 2.0));
+    fuse->appendSection(opads::FuselageSection(opads::CrossSectionShape::Circle, 1.0, 2.0, 2.0));
+    fuse->ensureBuilt();
+    aircraft.addComponent(std::move(fuse));
+
+    const auto wingId = aircraft.allocateComponentId();
+    auto wing = std::make_unique<opads::Wing>(wingId, "Wing");
+    wing->setCrossSectionChord(1, 0.8f);
+    wing->setCrossSectionTwistDeg(1, -3.5f);
+    wing->setSelectedCrossSection(1);
+    wing->ensureBuilt();
+    REQUIRE(wing->getCrossSectionChord(1) == Catch::Approx(0.8f));
+    REQUIRE(wing->getCrossSectionTwistDeg(1) == Catch::Approx(-3.5f));
+    const glm::vec3 tipLE = wing->getCrossSectionLeadingEdge(1);
+    aircraft.addComponent(std::move(wing));
+    aircraft.setSelectedComponentId(wingId);
+
+    // Excluding wingId allows snapping directly onto the cylinder fuselage surface at y=1.0
+    const opads::Ray sideRay{glm::vec3(5.0f, 5.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f)};
+    const opads::PickResult snapHit = opads::RayPicker::pickAircraft(sideRay, aircraft, wingId);
+    REQUIRE(snapHit.hit);
+    REQUIRE(snapHit.componentId == fuseId);
+    REQUIRE(snapHit.worldPos.y == Catch::Approx(1.0f).margin(0.02f));
+
+    // Gizmo origin switches cleanly between Part and CrossSection
+    opads::Gizmo gizmo;
+    glm::vec3 origin(0.0f);
+    gizmo.setTarget(opads::GizmoTarget::Part);
+    REQUIRE(gizmo.getOrigin(aircraft, origin));
+    REQUIRE(glm::length(origin) == Catch::Approx(0.0f).margin(1e-5f));
+
+    gizmo.setTarget(opads::GizmoTarget::CrossSection);
+    REQUIRE(gizmo.getOrigin(aircraft, origin));
+    REQUIRE(origin.x == Catch::Approx(tipLE.x).margin(1e-4f));
+    REQUIRE(origin.y == Catch::Approx(tipLE.y).margin(1e-4f));
+    REQUIRE(origin.z == Catch::Approx(tipLE.z).margin(1e-4f));
+}

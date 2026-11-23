@@ -31,7 +31,11 @@ public:
         float& tOut
     ) noexcept;
 
-    static PickResult pickAircraft(const Ray& worldRay, const Aircraft& aircraft);
+    static PickResult pickAircraft(
+        const Ray& worldRay,
+        const Aircraft& aircraft,
+        std::optional<std::uint64_t> excludeComponentId = std::nullopt
+    );
 };
 
 } // namespace opads

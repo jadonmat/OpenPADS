@@ -57,6 +57,12 @@ public:
     /// Updates span, sweep, and dihedral of bay (xsecIndex - 1) from a new local tip LE position.
     void moveCrossSectionLeadingEdge(std::size_t xsecIndex, const glm::vec3& newLocalTipLE);
 
+    float getCrossSectionChord(std::size_t xsecIndex) const noexcept;
+    void setCrossSectionChord(std::size_t xsecIndex, float chord);
+    float getCrossSectionTwistDeg(std::size_t xsecIndex) const noexcept;
+    void setCrossSectionTwistDeg(std::size_t xsecIndex, float twistDeg);
+    Airfoil* getCrossSectionAirfoil(std::size_t xsecIndex) noexcept;
+
     /// Geometric & aerodynamic reference metrics (including symmetry when XZ is active).
     double getPlanformArea() const noexcept;
     double getSpan() const noexcept;

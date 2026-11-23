@@ -390,6 +390,65 @@ void Wing::moveCrossSectionLeadingEdge(std::size_t xsecIndex, const glm::vec3& n
     markDirty();
 }
 
+float Wing::getCrossSectionChord(std::size_t xsecIndex) const noexcept {
+    if (m_sections.empty()) {
+        return 1.0f;
+    }
+    if (xsecIndex == 0) {
+        return m_sections.front().rootChord().getFloat();
+    }
+    const std::size_t bayIdx = std::min(xsecIndex - 1, m_sections.size() - 1);
+    return m_sections[bayIdx].tipChord().getFloat();
+}
+
+void Wing::setCrossSectionChord(std::size_t xsecIndex, float chord) {
+    if (m_sections.empty()) {
+        return;
+    }
+    const std::size_t clamped = std::min(xsecIndex, m_sections.size());
+    if (clamped == 0) {
+        m_sections.front().rootChord().setFloat(chord);
+    } else {
+        m_sections[clamped - 1].tipChord().setFloat(chord);
+    }
+    syncSectionsFromCrossSection(clamped);
+}
+
+float Wing::getCrossSectionTwistDeg(std::size_t xsecIndex) const noexcept {
+    if (m_sections.empty()) {
+        return 0.0f;
+    }
+    if (xsecIndex == 0) {
+        return m_sections.front().rootTwistDeg().getFloat();
+    }
+    const std::size_t bayIdx = std::min(xsecIndex - 1, m_sections.size() - 1);
+    return m_sections[bayIdx].tipTwistDeg().getFloat();
+}
+
+void Wing::setCrossSectionTwistDeg(std::size_t xsecIndex, float twistDeg) {
+    if (m_sections.empty()) {
+        return;
+    }
+    const std::size_t clamped = std::min(xsecIndex, m_sections.size());
+    if (clamped == 0) {
+        m_sections.front().rootTwistDeg().setFloat(twistDeg);
+    } else {
+        m_sections[clamped - 1].tipTwistDeg().setFloat(twistDeg);
+    }
+    syncSectionsFromCrossSection(clamped);
+}
+
+Airfoil* Wing::getCrossSectionAirfoil(std::size_t xsecIndex) noexcept {
+    if (m_sections.empty()) {
+        return nullptr;
+    }
+    if (xsecIndex == 0) {
+        return &m_sections.front().getRootAirfoil();
+    }
+    const std::size_t bayIdx = std::min(xsecIndex - 1, m_sections.size() - 1);
+    return &m_sections[bayIdx].getTipAirfoil();
+}
+
 double Wing::getPlanformArea() const noexcept {
     double area = 0.0;
     for (const WingSection& bay : m_sections) {

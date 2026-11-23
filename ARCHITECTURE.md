@@ -172,12 +172,14 @@ classDiagram
 
         class Gizmo {
             -GizmoMode m_mode
+            -GizmoTarget m_target
+            -bool m_surfaceSnap
             -GizmoAxis m_hoveredAxis
             -GizmoAxis m_activeAxis
             -bool m_dragging
             +updateHover(Ray, Aircraft, OrbitCamera) void
             +beginDrag(Ray, Aircraft, OrbitCamera) bool
-            +updateDrag(Ray, Aircraft&) void
+            +updateDrag(Ray, Aircraft&, OrbitCamera) void
             +render(mat4, Aircraft, OrbitCamera) void
         }
 
@@ -335,7 +337,7 @@ flowchart TD
 | **Core** | `src/core/Aircraft.hpp/.cpp` | Root container owning components, IDs, selection, and dirty rebuilds |
 | **Render** | `src/render/OrbitCamera.hpp/.cpp` | Spherical orbit/pan/zoom camera, CAD view presets, and screen-to-ray unprojection |
 | **Render** | `src/render/RayPicker.hpp/.cpp` | Möller–Trumbore 3D picking against component meshes & wing cross-sections |
-| **Render** | `src/render/Gizmo.hpp/.cpp` | 3D X/Y/Z axis manipulation gizmo for component move & cross-section dragging |
+| **Render** | `src/render/Gizmo.hpp/.cpp` | 3D Move/Rotate/Scale gizmos for Parts & Cross-Sections + Surface Snapping |
 | **Render** | `src/render/Shader.hpp/.cpp` | RAII OpenGL shader compiler and uniform helpers |
 | **Render** | `src/render/MeshBuffer.hpp/.cpp` | GPU `VAO`/`VBO`/`EBO` buffer lifecycle for `Mesh` |
 | **Render** | `src/render/GridRenderer.hpp/.cpp` | Procedural anti-aliased `Z = 0` grid and origin RGB triad |

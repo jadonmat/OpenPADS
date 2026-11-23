@@ -4,13 +4,16 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <numbers>
 #include <vector>
 
 #include <glad/gl.h>
 #include <glm/geometric.hpp>
+#include <glm/trigonometric.hpp>
 
 #include "core/Fuselage.hpp"
 #include "core/Wing.hpp"
+#include "render/RayPicker.hpp"
 
 namespace opads {
 
@@ -96,6 +99,59 @@ float rayToSegmentDistance(
     return glm::length(dP);
 }
 
+float rayToPointDistance(const Ray& ray, const glm::vec3& pt) noexcept {
+    const glm::vec3 toPt = pt - ray.origin;
+    const float proj = std::max(0.0f, glm::dot(toPt, ray.direction));
+    const glm::vec3 closest = ray.origin + ray.direction * proj;
+    return glm::length(pt - closest);
+}
+
+void buildRingBasis(GizmoAxis axis, glm::vec3& uOut, glm::vec3& vOut) noexcept {
+    if (axis == GizmoAxis::X) {
+        uOut = glm::vec3(0.0f, 1.0f, 0.0f);
+        vOut = glm::vec3(0.0f, 0.0f, 1.0f);
+    } else if (axis == GizmoAxis::Y) {
+        uOut = glm::vec3(1.0f, 0.0f, 0.0f);
+        vOut = glm::vec3(0.0f, 0.0f, 1.0f);
+    } else {
+        uOut = glm::vec3(1.0f, 0.0f, 0.0f);
+        vOut = glm::vec3(0.0f, 1.0f, 0.0f);
+    }
+}
+
+void pushLine(std::vector<float>& verts, const glm::vec3& a, const glm::vec3& b, const glm::vec3& col) {
+    verts.push_back(a.x); verts.push_back(a.y); verts.push_back(a.z);
+    verts.push_back(col.r); verts.push_back(col.g); verts.push_back(col.b);
+    verts.push_back(b.x); verts.push_back(b.y); verts.push_back(b.z);
+    verts.push_back(col.r); verts.push_back(col.g); verts.push_back(col.b);
+}
+
+void pushWireCube(std::vector<float>& verts, const glm::vec3& center, float halfExtent, const glm::vec3& col) {
+    const glm::vec3 d000(-halfExtent, -halfExtent, -halfExtent);
+    const glm::vec3 d100( halfExtent, -halfExtent, -halfExtent);
+    const glm::vec3 d110( halfExtent,  halfExtent, -halfExtent);
+    const glm::vec3 d010(-halfExtent,  halfExtent, -halfExtent);
+    const glm::vec3 d001(-halfExtent, -halfExtent,  halfExtent);
+    const glm::vec3 d101( halfExtent, -halfExtent,  halfExtent);
+    const glm::vec3 d111( halfExtent,  halfExtent,  halfExtent);
+    const glm::vec3 d011(-halfExtent,  halfExtent,  halfExtent);
+
+    pushLine(verts, center + d000, center + d100, col);
+    pushLine(verts, center + d100, center + d110, col);
+    pushLine(verts, center + d110, center + d010, col);
+    pushLine(verts, center + d010, center + d000, col);
+
+    pushLine(verts, center + d001, center + d101, col);
+    pushLine(verts, center + d101, center + d111, col);
+    pushLine(verts, center + d111, center + d011, col);
+    pushLine(verts, center + d011, center + d001, col);
+
+    pushLine(verts, center + d000, center + d001, col);
+    pushLine(verts, center + d100, center + d101, col);
+    pushLine(verts, center + d110, center + d111, col);
+    pushLine(verts, center + d010, center + d011, col);
+}
+
 } // namespace
 
 Gizmo::~Gizmo() {
@@ -129,9 +185,7 @@ bool Gizmo::initialize() {
     return true;
 }
 
-GizmoMode Gizmo::getMode() const noexcept {
-    return m_mode;
-}
+GizmoMode Gizmo::getMode() const noexcept { return m_mode; }
 
 void Gizmo::setMode(GizmoMode mode) noexcept {
     m_mode = mode;
@@ -141,20 +195,31 @@ void Gizmo::setMode(GizmoMode mode) noexcept {
     }
 }
 
-GizmoAxis Gizmo::getHoveredAxis() const noexcept {
-    return m_hoveredAxis;
+GizmoTarget Gizmo::getTarget() const noexcept { return m_target; }
+
+void Gizmo::setTarget(GizmoTarget target) noexcept {
+    if (m_target != target) {
+        endDrag();
+        m_target = target;
+        m_hoveredAxis = GizmoAxis::None;
+    }
 }
 
-bool Gizmo::isDragging() const noexcept {
-    return m_dragging;
-}
+bool Gizmo::isSurfaceSnapEnabled() const noexcept { return m_surfaceSnap; }
+
+void Gizmo::setSurfaceSnapEnabled(bool enabled) noexcept { m_surfaceSnap = enabled; }
+
+GizmoAxis Gizmo::getHoveredAxis() const noexcept { return m_hoveredAxis; }
+bool Gizmo::isDragging() const noexcept { return m_dragging; }
 
 glm::vec3 Gizmo::axisVector(GizmoAxis axis) noexcept {
     switch (axis) {
     case GizmoAxis::X: return glm::vec3(1.0f, 0.0f, 0.0f);
     case GizmoAxis::Y: return glm::vec3(0.0f, 1.0f, 0.0f);
     case GizmoAxis::Z: return glm::vec3(0.0f, 0.0f, 1.0f);
-    case GizmoAxis::None: break;
+    case GizmoAxis::Center:
+    case GizmoAxis::None:
+        break;
     }
     return glm::vec3(0.0f);
 }
@@ -171,6 +236,24 @@ float Gizmo::projectRayOntoAxis(const Ray& ray, const glm::vec3& origin, const g
     return (b * e - d) / denom;
 }
 
+bool Gizmo::intersectRayPlane(
+    const Ray& ray,
+    const glm::vec3& planeOrigin,
+    const glm::vec3& planeNormal,
+    glm::vec3& hitOut
+) noexcept {
+    const float denom = glm::dot(ray.direction, planeNormal);
+    if (std::abs(denom) < 1e-5f) {
+        return false;
+    }
+    const float t = glm::dot(planeOrigin - ray.origin, planeNormal) / denom;
+    if (t < 0.0f) {
+        return false;
+    }
+    hitOut = ray.origin + ray.direction * t;
+    return true;
+}
+
 bool Gizmo::getOrigin(const Aircraft& aircraft, glm::vec3& originOut) const noexcept {
     const auto selectedId = aircraft.getSelectedComponentId();
     if (!selectedId.has_value() || m_mode == GizmoMode::Select) {
@@ -181,15 +264,14 @@ bool Gizmo::getOrigin(const Aircraft& aircraft, glm::vec3& originOut) const noex
         return false;
     }
 
-    if (m_mode == GizmoMode::SectionHandle) {
+    if (m_target == GizmoTarget::CrossSection) {
         if (const auto* wing = dynamic_cast<const Wing*>(comp)) {
-            const std::size_t xsec = std::max<std::size_t>(1, wing->getSelectedCrossSection());
-            if (xsec <= wing->getSectionCount()) {
-                const glm::vec3 localLE = wing->getCrossSectionLeadingEdge(xsec);
-                originOut = glm::vec3(wing->getTransform().getMatrix() * glm::vec4(localLE, 1.0f));
-                return true;
-            }
-        } else if (const auto* fuse = dynamic_cast<const Fuselage*>(comp)) {
+            const std::size_t xsec = wing->getSelectedCrossSection();
+            const glm::vec3 localLE = wing->getCrossSectionLeadingEdge(xsec);
+            originOut = glm::vec3(wing->getTransform().getMatrix() * glm::vec4(localLE, 1.0f));
+            return true;
+        }
+        if (const auto* fuse = dynamic_cast<const Fuselage*>(comp)) {
             if (fuse->getSectionCount() > 0) {
                 const glm::vec3 localCenter = fuse->getSectionCenterLocal(fuse->getSelectedSection());
                 originOut = glm::vec3(fuse->getTransform().getMatrix() * glm::vec4(localCenter, 1.0f));
@@ -204,19 +286,76 @@ bool Gizmo::getOrigin(const Aircraft& aircraft, glm::vec3& originOut) const noex
 
 GizmoAxis Gizmo::hitTest(const Ray& ray, const glm::vec3& origin, float scale) const noexcept {
     const float threshold = scale * 0.16f;
-    float bestDist = threshold;
-    GizmoAxis bestAxis = GizmoAxis::None;
 
-    const std::array<GizmoAxis, 3> axes = {GizmoAxis::X, GizmoAxis::Y, GizmoAxis::Z};
-    for (GizmoAxis axis : axes) {
-        const glm::vec3 end = origin + axisVector(axis) * scale;
-        const float dist = rayToSegmentDistance(ray, origin + axisVector(axis) * (scale * 0.12f), end);
-        if (dist < bestDist) {
-            bestDist = dist;
-            bestAxis = axis;
+    if (m_mode == GizmoMode::Translate || m_mode == GizmoMode::Scale) {
+        if (rayToPointDistance(ray, origin) < scale * 0.16f) {
+            return GizmoAxis::Center;
         }
+
+        float bestDist = threshold;
+        GizmoAxis bestAxis = GizmoAxis::None;
+        const std::array<GizmoAxis, 3> axes = {GizmoAxis::X, GizmoAxis::Y, GizmoAxis::Z};
+        for (GizmoAxis axis : axes) {
+            const glm::vec3 start = origin + axisVector(axis) * (scale * 0.14f);
+            const glm::vec3 end = origin + axisVector(axis) * scale;
+            const float dist = rayToSegmentDistance(ray, start, end);
+            if (dist < bestDist) {
+                bestDist = dist;
+                bestAxis = axis;
+            }
+        }
+        return bestAxis;
     }
-    return bestAxis;
+
+    if (m_mode == GizmoMode::Rotate) {
+        constexpr int kSegments = 48;
+        const float ringRadius = scale * 0.85f;
+        float bestDist = threshold;
+        GizmoAxis bestAxis = GizmoAxis::None;
+
+        const std::array<GizmoAxis, 3> axes = {GizmoAxis::X, GizmoAxis::Y, GizmoAxis::Z};
+        for (GizmoAxis axis : axes) {
+            glm::vec3 u(0.0f);
+            glm::vec3 v(0.0f);
+            buildRingBasis(axis, u, v);
+            for (int i = 0; i < kSegments; ++i) {
+                const float a0 = 2.0f * std::numbers::pi_v<float> * static_cast<float>(i) / static_cast<float>(kSegments);
+                const float a1 = 2.0f * std::numbers::pi_v<float> * static_cast<float>(i + 1) / static_cast<float>(kSegments);
+                const glm::vec3 p0 = origin + (u * std::cos(a0) + v * std::sin(a0)) * ringRadius;
+                const glm::vec3 p1 = origin + (u * std::cos(a1) + v * std::sin(a1)) * ringRadius;
+                const float dist = rayToSegmentDistance(ray, p0, p1);
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    bestAxis = axis;
+                }
+            }
+        }
+        return bestAxis;
+    }
+
+    return GizmoAxis::None;
+}
+
+float Gizmo::computeRingAngleDeg(const Ray& ray, const glm::vec3& origin, const glm::vec3& axisDir) const noexcept {
+    glm::vec3 hit(0.0f);
+    if (!intersectRayPlane(ray, origin, axisDir, hit)) {
+        return m_dragStartAngleDeg;
+    }
+    const glm::vec3 dir = hit - origin;
+    if (glm::length(dir) < 1e-5f) {
+        return m_dragStartAngleDeg;
+    }
+
+    glm::vec3 u(0.0f);
+    glm::vec3 v(0.0f);
+    if (std::abs(axisDir.x) > 0.5f) {
+        buildRingBasis(GizmoAxis::X, u, v);
+    } else if (std::abs(axisDir.y) > 0.5f) {
+        buildRingBasis(GizmoAxis::Y, u, v);
+    } else {
+        buildRingBasis(GizmoAxis::Z, u, v);
+    }
+    return glm::degrees(std::atan2(glm::dot(dir, v), glm::dot(dir, u)));
 }
 
 void Gizmo::updateHover(const Ray& ray, const Aircraft& aircraft, const OrbitCamera& camera) {
@@ -253,19 +392,44 @@ bool Gizmo::beginDrag(const Ray& ray, const Aircraft& aircraft, const OrbitCamer
     m_activeAxis = hit;
     m_hoveredAxis = hit;
     m_dragStartOrigin = origin;
+    m_dragGizmoScale = scale;
     m_dragStartCompPos = comp->getTransform().getPosition();
-    m_dragStartAxisT = projectRayOntoAxis(ray, origin, axisVector(hit));
+    m_dragStartCompRotDeg = comp->getTransform().getRotationDeg();
+    m_dragStartCompScale = comp->getTransform().getScale();
+
+    if (!intersectRayPlane(ray, origin, camera.getForward(), m_dragStartPlaneHit)) {
+        m_dragStartPlaneHit = origin;
+    }
+
+    if (hit != GizmoAxis::Center) {
+        const glm::vec3 axisDir = axisVector(hit);
+        m_dragStartAxisT = projectRayOntoAxis(ray, origin, axisDir);
+        m_dragStartAngleDeg = computeRingAngleDeg(ray, origin, axisDir);
+    }
 
     if (const auto* wing = dynamic_cast<const Wing*>(comp)) {
-        const std::size_t xsec = std::max<std::size_t>(1, wing->getSelectedCrossSection());
-        m_dragStartLocalTipLE = wing->getCrossSectionLeadingEdge(xsec);
+        const std::size_t xsec = wing->getSelectedCrossSection();
+        m_dragStartLocalAnchor = wing->getCrossSectionLeadingEdge(xsec);
+        m_dragStartChord = wing->getCrossSectionChord(xsec);
+        m_dragStartTwistDeg = wing->getCrossSectionTwistDeg(xsec);
+        if (xsec == 0 && wing->getSectionCount() > 0) {
+            m_dragStartThickScale = wing->getSection(0).getRootAirfoil().getThicknessScale();
+        } else if (xsec > 0 && xsec <= wing->getSectionCount()) {
+            m_dragStartThickScale = wing->getSection(xsec - 1).getTipAirfoil().getThicknessScale();
+        }
     } else if (const auto* fuse = dynamic_cast<const Fuselage*>(comp)) {
-        m_dragStartLocalTipLE = fuse->getSectionCenterLocal(fuse->getSelectedSection());
+        const std::size_t xsec = fuse->getSelectedSection();
+        m_dragStartLocalAnchor = fuse->getSectionCenterLocal(xsec);
+        if (xsec < fuse->getSectionCount()) {
+            m_dragStartFuseWidth = fuse->getSection(xsec).width().getFloat();
+            m_dragStartFuseHeight = fuse->getSection(xsec).height().getFloat();
+        }
     }
+
     return true;
 }
 
-void Gizmo::updateDrag(const Ray& ray, Aircraft& aircraft) {
+void Gizmo::updateDrag(const Ray& ray, Aircraft& aircraft, const OrbitCamera& camera) {
     if (!m_dragging || m_activeAxis == GizmoAxis::None) {
         return;
     }
@@ -276,24 +440,142 @@ void Gizmo::updateDrag(const Ray& ray, Aircraft& aircraft) {
         return;
     }
 
-    const glm::vec3 axisDir = axisVector(m_activeAxis);
-    const float currentT = projectRayOntoAxis(ray, m_dragStartOrigin, axisDir);
-    const float deltaT = currentT - m_dragStartAxisT;
-
     if (m_mode == GizmoMode::Translate) {
-        comp->getTransform().setPosition(m_dragStartCompPos + axisDir * deltaT);
-    } else if (m_mode == GizmoMode::SectionHandle) {
-        if (auto* wing = dynamic_cast<Wing*>(comp)) {
-            const std::size_t xsec = std::max<std::size_t>(1, wing->getSelectedCrossSection());
-            if (xsec <= wing->getSectionCount()) {
+        if (m_activeAxis == GizmoAxis::Center) {
+            if (m_target == GizmoTarget::Part && m_surfaceSnap) {
+                const PickResult snapPick = RayPicker::pickAircraft(ray, aircraft, comp->getId());
+                if (snapPick.hit) {
+                    comp->getTransform().setPosition(snapPick.worldPos);
+                    return;
+                }
+            }
+            glm::vec3 planeHit(0.0f);
+            if (intersectRayPlane(ray, m_dragStartOrigin, camera.getForward(), planeHit)) {
+                const glm::vec3 worldDelta = planeHit - m_dragStartPlaneHit;
+                if (m_target == GizmoTarget::Part) {
+                    comp->getTransform().setPosition(m_dragStartCompPos + worldDelta);
+                } else if (auto* wing = dynamic_cast<Wing*>(comp)) {
+                    const std::size_t xsec = wing->getSelectedCrossSection();
+                    if (xsec == 0) {
+                        comp->getTransform().setPosition(m_dragStartCompPos + worldDelta);
+                    } else {
+                        const glm::mat4 invModel = glm::inverse(wing->getTransform().getMatrix());
+                        const glm::vec3 localDelta = glm::vec3(invModel * glm::vec4(worldDelta, 0.0f));
+                        wing->moveCrossSectionLeadingEdge(xsec, m_dragStartLocalAnchor + localDelta);
+                    }
+                } else if (auto* fuse = dynamic_cast<Fuselage*>(comp)) {
+                    const glm::mat4 invModel = glm::inverse(fuse->getTransform().getMatrix());
+                    const glm::vec3 localDelta = glm::vec3(invModel * glm::vec4(worldDelta, 0.0f));
+                    fuse->setSectionCenterLocal(fuse->getSelectedSection(), m_dragStartLocalAnchor + localDelta);
+                }
+            }
+            return;
+        }
+
+        const glm::vec3 axisDir = axisVector(m_activeAxis);
+        const float deltaT = projectRayOntoAxis(ray, m_dragStartOrigin, axisDir) - m_dragStartAxisT;
+        const glm::vec3 worldDelta = axisDir * deltaT;
+
+        if (m_target == GizmoTarget::Part) {
+            glm::vec3 newPos = m_dragStartCompPos + worldDelta;
+            if (m_surfaceSnap) {
+                const float snapThreshold = m_dragGizmoScale * 0.40f;
+                const PickResult fwdPick = RayPicker::pickAircraft(Ray{newPos, axisDir}, aircraft, comp->getId());
+                const PickResult bwdPick = RayPicker::pickAircraft(Ray{newPos, -axisDir}, aircraft, comp->getId());
+                if (fwdPick.hit && fwdPick.distance < snapThreshold &&
+                    (!bwdPick.hit || fwdPick.distance <= bwdPick.distance)) {
+                    newPos = fwdPick.worldPos;
+                } else if (bwdPick.hit && bwdPick.distance < snapThreshold) {
+                    newPos = bwdPick.worldPos;
+                }
+            }
+            comp->getTransform().setPosition(newPos);
+        } else if (auto* wing = dynamic_cast<Wing*>(comp)) {
+            const std::size_t xsec = wing->getSelectedCrossSection();
+            if (xsec == 0) {
+                comp->getTransform().setPosition(m_dragStartCompPos + worldDelta);
+            } else {
                 const glm::mat4 invModel = glm::inverse(wing->getTransform().getMatrix());
-                const glm::vec3 localDelta = glm::vec3(invModel * glm::vec4(axisDir * deltaT, 0.0f));
-                wing->moveCrossSectionLeadingEdge(xsec, m_dragStartLocalTipLE + localDelta);
+                const glm::vec3 localDelta = glm::vec3(invModel * glm::vec4(worldDelta, 0.0f));
+                wing->moveCrossSectionLeadingEdge(xsec, m_dragStartLocalAnchor + localDelta);
             }
         } else if (auto* fuse = dynamic_cast<Fuselage*>(comp)) {
             const glm::mat4 invModel = glm::inverse(fuse->getTransform().getMatrix());
-            const glm::vec3 localDelta = glm::vec3(invModel * glm::vec4(axisDir * deltaT, 0.0f));
-            fuse->setSectionCenterLocal(fuse->getSelectedSection(), m_dragStartLocalTipLE + localDelta);
+            const glm::vec3 localDelta = glm::vec3(invModel * glm::vec4(worldDelta, 0.0f));
+            fuse->setSectionCenterLocal(fuse->getSelectedSection(), m_dragStartLocalAnchor + localDelta);
+        }
+        return;
+    }
+
+    if (m_mode == GizmoMode::Rotate && m_activeAxis != GizmoAxis::Center) {
+        const glm::vec3 axisDir = axisVector(m_activeAxis);
+        const float angleDeg = computeRingAngleDeg(ray, m_dragStartOrigin, axisDir);
+        float deltaAngle = angleDeg - m_dragStartAngleDeg;
+        if (deltaAngle > 180.0f) deltaAngle -= 360.0f;
+        if (deltaAngle < -180.0f) deltaAngle += 360.0f;
+
+        if (m_target == GizmoTarget::Part) {
+            comp->getTransform().setRotationDeg(m_dragStartCompRotDeg + axisDir * deltaAngle);
+        } else if (auto* wing = dynamic_cast<Wing*>(comp)) {
+            if (m_activeAxis == GizmoAxis::Y) {
+                wing->setCrossSectionTwistDeg(wing->getSelectedCrossSection(), m_dragStartTwistDeg + deltaAngle);
+            }
+        }
+        return;
+    }
+
+    if (m_mode == GizmoMode::Scale) {
+        float scaleFactor = 1.0f;
+        if (m_activeAxis == GizmoAxis::Center) {
+            glm::vec3 planeHit(0.0f);
+            if (intersectRayPlane(ray, m_dragStartOrigin, camera.getForward(), planeHit)) {
+                const glm::vec3 delta = planeHit - m_dragStartPlaneHit;
+                const float projected = glm::dot(delta, camera.getRight() + camera.getUp());
+                scaleFactor = std::max(0.05f, 1.0f + projected / std::max(m_dragGizmoScale, 0.1f));
+            }
+        } else {
+            const glm::vec3 axisDir = axisVector(m_activeAxis);
+            const float deltaT = projectRayOntoAxis(ray, m_dragStartOrigin, axisDir) - m_dragStartAxisT;
+            scaleFactor = std::max(0.05f, 1.0f + deltaT / std::max(m_dragGizmoScale, 0.1f));
+        }
+
+        if (m_target == GizmoTarget::Part) {
+            glm::vec3 newScale = m_dragStartCompScale;
+            if (m_activeAxis == GizmoAxis::Center) {
+                newScale *= scaleFactor;
+            } else if (m_activeAxis == GizmoAxis::X) {
+                newScale.x *= scaleFactor;
+            } else if (m_activeAxis == GizmoAxis::Y) {
+                newScale.y *= scaleFactor;
+            } else if (m_activeAxis == GizmoAxis::Z) {
+                newScale.z *= scaleFactor;
+            }
+            comp->getTransform().setScale(glm::max(newScale, glm::vec3(0.01f)));
+        } else if (auto* wing = dynamic_cast<Wing*>(comp)) {
+            const std::size_t xsec = wing->getSelectedCrossSection();
+            if (m_activeAxis == GizmoAxis::Z) {
+                if (Airfoil* foil = wing->getCrossSectionAirfoil(xsec)) {
+                    if (foil->setThicknessScale(m_dragStartThickScale * scaleFactor)) {
+                        wing->syncSectionsFromCrossSection(xsec);
+                    }
+                }
+            } else {
+                wing->setCrossSectionChord(xsec, std::max(0.05f, m_dragStartChord * scaleFactor));
+            }
+        } else if (auto* fuse = dynamic_cast<Fuselage*>(comp)) {
+            const std::size_t xsec = fuse->getSelectedSection();
+            if (xsec < fuse->getSectionCount()) {
+                FuselageSection& sec = fuse->getSection(xsec);
+                if (m_activeAxis == GizmoAxis::Y) {
+                    sec.width().setFloat(std::max(0.02f, m_dragStartFuseWidth * scaleFactor));
+                } else if (m_activeAxis == GizmoAxis::Z) {
+                    sec.height().setFloat(std::max(0.02f, m_dragStartFuseHeight * scaleFactor));
+                } else {
+                    sec.width().setFloat(std::max(0.02f, m_dragStartFuseWidth * scaleFactor));
+                    sec.height().setFloat(std::max(0.02f, m_dragStartFuseHeight * scaleFactor));
+                }
+                fuse->markDirty();
+            }
         }
     }
 }
@@ -316,38 +598,67 @@ void Gizmo::render(const glm::mat4& viewProj, const Aircraft& aircraft, const Or
     const GizmoAxis highlighted = m_dragging ? m_activeAxis : m_hoveredAxis;
 
     std::vector<float> verts;
-    verts.reserve(6 * 6 * 3);
-
-    const auto pushLine = [&](const glm::vec3& a, const glm::vec3& b, const glm::vec3& col) {
-        verts.push_back(a.x); verts.push_back(a.y); verts.push_back(a.z);
-        verts.push_back(col.r); verts.push_back(col.g); verts.push_back(col.b);
-        verts.push_back(b.x); verts.push_back(b.y); verts.push_back(b.z);
-        verts.push_back(col.r); verts.push_back(col.g); verts.push_back(col.b);
+    const auto axisColor = [&](GizmoAxis axis, const glm::vec3& base) {
+        return (highlighted == axis) ? glm::vec3(1.0f, 0.92f, 0.28f) : base;
     };
 
-    const auto drawAxis = [&](GizmoAxis axis, const glm::vec3& baseColor) {
-        const glm::vec3 dir = axisVector(axis);
-        const glm::vec3 col = (highlighted == axis) ? glm::vec3(1.0f, 0.90f, 0.25f) : baseColor;
-        const glm::vec3 tip = origin + dir * scale;
-        pushLine(origin, tip, col);
+    if (m_mode == GizmoMode::Translate || m_mode == GizmoMode::Scale) {
+        const glm::vec3 centerCol = (highlighted == GizmoAxis::Center)
+            ? glm::vec3(1.0f, 0.92f, 0.28f)
+            : (m_surfaceSnap && m_mode == GizmoMode::Translate ? glm::vec3(0.30f, 0.95f, 0.95f) : glm::vec3(0.92f, 0.92f, 0.95f));
+        pushWireCube(verts, origin, scale * 0.075f, centerCol);
 
-        // Simple 3D arrowhead cross ticks
-        const glm::vec3 ortho1 = (axis == GizmoAxis::Z) ? glm::vec3(1.0f, 0.0f, 0.0f) : glm::vec3(0.0f, 0.0f, 1.0f);
-        const glm::vec3 ortho2 = glm::cross(dir, ortho1);
-        const glm::vec3 headBase = origin + dir * (scale * 0.84f);
-        const float headR = scale * 0.06f;
-        pushLine(tip, headBase + ortho1 * headR, col);
-        pushLine(tip, headBase - ortho1 * headR, col);
-        pushLine(tip, headBase + ortho2 * headR, col);
-        pushLine(tip, headBase - ortho2 * headR, col);
-    };
+        const auto drawAxis = [&](GizmoAxis axis, const glm::vec3& baseCol) {
+            const glm::vec3 dir = axisVector(axis);
+            const glm::vec3 col = axisColor(axis, baseCol);
+            const glm::vec3 tip = origin + dir * scale;
+            pushLine(verts, origin + dir * (scale * 0.10f), tip, col);
 
-    drawAxis(GizmoAxis::X, glm::vec3(0.95f, 0.28f, 0.28f));
-    drawAxis(GizmoAxis::Y, glm::vec3(0.28f, 0.88f, 0.36f));
-    drawAxis(GizmoAxis::Z, glm::vec3(0.32f, 0.62f, 1.00f));
+            if (m_mode == GizmoMode::Translate) {
+                const glm::vec3 ortho1 = (axis == GizmoAxis::Z) ? glm::vec3(1.0f, 0.0f, 0.0f) : glm::vec3(0.0f, 0.0f, 1.0f);
+                const glm::vec3 ortho2 = glm::cross(dir, ortho1);
+                const glm::vec3 headBase = origin + dir * (scale * 0.84f);
+                const float headR = scale * 0.06f;
+                pushLine(verts, tip, headBase + ortho1 * headR, col);
+                pushLine(verts, tip, headBase - ortho1 * headR, col);
+                pushLine(verts, tip, headBase + ortho2 * headR, col);
+                pushLine(verts, tip, headBase - ortho2 * headR, col);
+            } else {
+                pushWireCube(verts, tip, scale * 0.055f, col);
+            }
+        };
+
+        drawAxis(GizmoAxis::X, glm::vec3(0.95f, 0.28f, 0.28f));
+        drawAxis(GizmoAxis::Y, glm::vec3(0.28f, 0.88f, 0.36f));
+        drawAxis(GizmoAxis::Z, glm::vec3(0.32f, 0.62f, 1.00f));
+    } else if (m_mode == GizmoMode::Rotate) {
+        constexpr int kSegments = 48;
+        const float ringRadius = scale * 0.85f;
+        const auto drawRing = [&](GizmoAxis axis, const glm::vec3& baseCol) {
+            const glm::vec3 col = axisColor(axis, baseCol);
+            glm::vec3 u(0.0f);
+            glm::vec3 v(0.0f);
+            buildRingBasis(axis, u, v);
+            for (int i = 0; i < kSegments; ++i) {
+                const float a0 = 2.0f * std::numbers::pi_v<float> * static_cast<float>(i) / static_cast<float>(kSegments);
+                const float a1 = 2.0f * std::numbers::pi_v<float> * static_cast<float>(i + 1) / static_cast<float>(kSegments);
+                const glm::vec3 p0 = origin + (u * std::cos(a0) + v * std::sin(a0)) * ringRadius;
+                const glm::vec3 p1 = origin + (u * std::cos(a1) + v * std::sin(a1)) * ringRadius;
+                pushLine(verts, p0, p1, col);
+            }
+        };
+
+        drawRing(GizmoAxis::X, glm::vec3(0.95f, 0.28f, 0.28f));
+        drawRing(GizmoAxis::Y, glm::vec3(0.28f, 0.88f, 0.36f));
+        drawRing(GizmoAxis::Z, glm::vec3(0.32f, 0.62f, 1.00f));
+    }
+
+    if (verts.empty()) {
+        return;
+    }
 
     glDisable(GL_DEPTH_TEST);
-    glLineWidth(3.0f);
+    glLineWidth(2.6f);
     m_shader.bind();
     m_shader.setMat4("uViewProj", viewProj);
 

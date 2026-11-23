@@ -48,6 +48,7 @@ std::string shapeToString(CrossSectionShape shape) {
     case CrossSectionShape::Ellipse: return "ellipse";
     case CrossSectionShape::SuperEllipse: return "super_ellipse";
     case CrossSectionShape::RoundedRect: return "rounded_rect";
+    case CrossSectionShape::GeneralFuse: return "general_fuse";
     }
     return "ellipse";
 }
@@ -57,6 +58,7 @@ CrossSectionShape stringToShape(const std::string& s) {
     if (s == "circle") return CrossSectionShape::Circle;
     if (s == "super_ellipse") return CrossSectionShape::SuperEllipse;
     if (s == "rounded_rect") return CrossSectionShape::RoundedRect;
+    if (s == "general_fuse") return CrossSectionShape::GeneralFuse;
     return CrossSectionShape::Ellipse;
 }
 
@@ -171,6 +173,9 @@ json serializeWing(const Wing& wing) {
         {"visible", wing.isVisible()},
         {"symmetry", wing.getSymmetry() == SymmetryMode::XZ ? "XZ" : "None"},
         {"capTips", wing.getCapTips()},
+        {"tipCapType", static_cast<int>(wing.getTipCapType())},
+        {"tipCapLength", wing.getTipCapLength()},
+        {"tipCapStrength", wing.getTipCapStrength()},
         {"chordPoints", wing.getChordPoints()},
         {"transform", serializeTransform(wing.getTransform())},
         {"sections", bays},
@@ -181,7 +186,7 @@ json serializeWing(const Wing& wing) {
 json serializeFuselage(const Fuselage& fuse) {
     json sections = json::array();
     for (const FuselageSection& sec : fuse.getSections()) {
-        sections.push_back(json{
+        json sj{
             {"shape", shapeToString(sec.getShape())},
             {"stationFrac", sec.stationFrac().getValue()},
             {"width", sec.width().getValue()},
@@ -192,7 +197,41 @@ json serializeFuselage(const Fuselage& fuse) {
             {"bottomSuperEllipseN", sec.getBottomSuperEllipseN()},
             {"maxWidthLocFrac", sec.getMaxWidthLocFrac()},
             {"cornerRadiusFrac", sec.cornerRadiusFrac().getValue()}
-        });
+        };
+        if (sec.getShape() == CrossSectionShape::GeneralFuse) {
+            const GeneralFuseParams& gf = sec.getGeneralFuse();
+            sj["generalFuse"] = json{
+                {"topStr", gf.topStr},
+                {"botStr", gf.botStr},
+                {"upStr", gf.upStr},
+                {"lowStr", gf.lowStr},
+                {"topTanAngleDeg", gf.topTanAngleDeg},
+                {"botTanAngleDeg", gf.botTanAngleDeg}
+            };
+        }
+        const FuselageSkinning& sk = sec.getSkinning();
+        if (sk.enabled) {
+            sj["skinning"] = json{
+                {"enabled", true},
+                {"topLAngleDeg", sk.topLAngleDeg},
+                {"bottomLAngleDeg", sk.bottomLAngleDeg},
+                {"leftLAngleDeg", sk.leftLAngleDeg},
+                {"rightLAngleDeg", sk.rightLAngleDeg},
+                {"topRAngleDeg", sk.topRAngleDeg},
+                {"bottomRAngleDeg", sk.bottomRAngleDeg},
+                {"leftRAngleDeg", sk.leftRAngleDeg},
+                {"rightRAngleDeg", sk.rightRAngleDeg},
+                {"topLStrength", sk.topLStrength},
+                {"bottomLStrength", sk.bottomLStrength},
+                {"leftLStrength", sk.leftLStrength},
+                {"rightLStrength", sk.rightLStrength},
+                {"topRStrength", sk.topRStrength},
+                {"bottomRStrength", sk.bottomRStrength},
+                {"leftRStrength", sk.leftRStrength},
+                {"rightRStrength", sk.rightRStrength}
+            };
+        }
+        sections.push_back(std::move(sj));
     }
 
     return json{
@@ -202,6 +241,12 @@ json serializeFuselage(const Fuselage& fuse) {
         {"length", fuse.length().getValue()},
         {"smoothLoft", fuse.isSmoothLoft()},
         {"capEnds", fuse.getCapEnds()},
+        {"noseCapType", static_cast<int>(fuse.getNoseCapType())},
+        {"noseCapLength", fuse.getNoseCapLength()},
+        {"noseCapStrength", fuse.getNoseCapStrength()},
+        {"tailCapType", static_cast<int>(fuse.getTailCapType())},
+        {"tailCapLength", fuse.getTailCapLength()},
+        {"tailCapStrength", fuse.getTailCapStrength()},
         {"radialPoints", fuse.getRadialPoints()},
         {"axialSubdivisions", fuse.getAxialSubdivisions()},
         {"transform", serializeTransform(fuse.getTransform())},
@@ -237,7 +282,8 @@ json serializePropeller(const Propeller& prop) {
             {"chord", st.chord},
             {"twistDeg", st.twistDeg},
             {"sweepOffset", st.sweepOffset},
-            {"rakeOffset", st.rakeOffset}
+            {"rakeOffset", st.rakeOffset},
+            {"thicknessRatio", st.thicknessRatio}
         });
     }
 
@@ -333,6 +379,11 @@ std::unique_ptr<Component> deserializeComponent(const json& cj, std::uint64_t id
         wing->setVisible(cj.value("visible", true));
         wing->setSymmetry(cj.value("symmetry", "XZ") == "XZ" ? SymmetryMode::XZ : SymmetryMode::None);
         wing->setCapTips(cj.value("capTips", true));
+        if (cj.contains("tipCapType")) {
+            wing->setTipCapType(static_cast<EndCapType>(cj.value("tipCapType", 1)));
+            wing->setTipCapLength(cj.value("tipCapLength", 1.0));
+            wing->setTipCapStrength(cj.value("tipCapStrength", 0.5));
+        }
         wing->setChordPoints(cj.value("chordPoints", 41));
         if (cj.contains("transform")) {
             deserializeTransform(cj["transform"], wing->getTransform());
@@ -391,6 +442,16 @@ std::unique_ptr<Component> deserializeComponent(const json& cj, std::uint64_t id
         fuse->length().setValue(cj.value("length", 12.0));
         fuse->setSmoothLoft(cj.value("smoothLoft", true));
         fuse->setCapEnds(cj.value("capEnds", true));
+        if (cj.contains("noseCapType")) {
+            fuse->setNoseCapType(static_cast<EndCapType>(cj.value("noseCapType", 1)));
+            fuse->setNoseCapLength(cj.value("noseCapLength", 1.0));
+            fuse->setNoseCapStrength(cj.value("noseCapStrength", 0.5));
+        }
+        if (cj.contains("tailCapType")) {
+            fuse->setTailCapType(static_cast<EndCapType>(cj.value("tailCapType", 1)));
+            fuse->setTailCapLength(cj.value("tailCapLength", 1.0));
+            fuse->setTailCapStrength(cj.value("tailCapStrength", 0.5));
+        }
         fuse->setRadialPoints(cj.value("radialPoints", 36));
         fuse->setAxialSubdivisions(cj.value("axialSubdivisions", 8));
         if (cj.contains("transform")) {
@@ -412,6 +473,39 @@ std::unique_ptr<Component> deserializeComponent(const json& cj, std::uint64_t id
                 sec.setBottomSuperEllipseN(sj.value("bottomSuperEllipseN", -1.0));
                 sec.setMaxWidthLocFrac(sj.value("maxWidthLocFrac", 0.0));
                 sec.cornerRadiusFrac().setValue(sj.value("cornerRadiusFrac", 0.25));
+                if (sj.contains("generalFuse") && sj["generalFuse"].is_object()) {
+                    const json& gfj = sj["generalFuse"];
+                    GeneralFuseParams gf;
+                    gf.topStr = gfj.value("topStr", 0.83);
+                    gf.botStr = gfj.value("botStr", 0.83);
+                    gf.upStr = gfj.value("upStr", 0.83);
+                    gf.lowStr = gfj.value("lowStr", 0.83);
+                    gf.topTanAngleDeg = gfj.value("topTanAngleDeg", 90.0);
+                    gf.botTanAngleDeg = gfj.value("botTanAngleDeg", 90.0);
+                    sec.setGeneralFuse(gf);
+                }
+                if (sj.contains("skinning") && sj["skinning"].is_object()) {
+                    const json& skj = sj["skinning"];
+                    FuselageSkinning sk;
+                    sk.enabled = skj.value("enabled", false);
+                    sk.topLAngleDeg = skj.value("topLAngleDeg", 0.0);
+                    sk.bottomLAngleDeg = skj.value("bottomLAngleDeg", 0.0);
+                    sk.leftLAngleDeg = skj.value("leftLAngleDeg", 0.0);
+                    sk.rightLAngleDeg = skj.value("rightLAngleDeg", 0.0);
+                    sk.topRAngleDeg = skj.value("topRAngleDeg", 0.0);
+                    sk.bottomRAngleDeg = skj.value("bottomRAngleDeg", 0.0);
+                    sk.leftRAngleDeg = skj.value("leftRAngleDeg", 0.0);
+                    sk.rightRAngleDeg = skj.value("rightRAngleDeg", 0.0);
+                    sk.topLStrength = skj.value("topLStrength", 1.0);
+                    sk.bottomLStrength = skj.value("bottomLStrength", 1.0);
+                    sk.leftLStrength = skj.value("leftLStrength", 1.0);
+                    sk.rightLStrength = skj.value("rightLStrength", 1.0);
+                    sk.topRStrength = skj.value("topRStrength", 1.0);
+                    sk.bottomRStrength = skj.value("bottomRStrength", 1.0);
+                    sk.leftRStrength = skj.value("leftRStrength", 1.0);
+                    sk.rightRStrength = skj.value("rightRStrength", 1.0);
+                    sec.setSkinning(sk);
+                }
                 fuse->appendSection(std::move(sec));
             }
         }
@@ -466,6 +560,7 @@ std::unique_ptr<Component> deserializeComponent(const json& cj, std::uint64_t id
                 st.twistDeg = stJson.value("twistDeg", 20.0);
                 st.sweepOffset = stJson.value("sweepOffset", 0.0);
                 st.rakeOffset = stJson.value("rakeOffset", 0.0);
+                st.thicknessRatio = stJson.value("thicknessRatio", -1.0);
                 curve.push_back(st);
             }
             prop->setBladeCurve(std::move(curve));

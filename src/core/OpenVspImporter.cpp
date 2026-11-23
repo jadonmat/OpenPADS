@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <fstream>
 #include <iomanip>
@@ -124,6 +125,39 @@ double readParmDouble(const pugi::xml_node& container, const char* name, double 
     double val = fallback;
     tryReadParmDouble(container, name, val);
     return val;
+}
+
+struct VspEndCap {
+    EndCapType minType{EndCapType::Flat};
+    double minLength{1.0};
+    double minStrength{0.5};
+    EndCapType maxType{EndCapType::Flat};
+    double maxLength{1.0};
+    double maxStrength{0.5};
+};
+
+EndCapType toEndCapType(int opt) noexcept {
+    switch (opt) {
+    case 0: return EndCapType::None;
+    case 1: return EndCapType::Flat;
+    case 2: return EndCapType::Round;
+    case 3: return EndCapType::Edge;
+    case 4: return EndCapType::Sharp;
+    default: return EndCapType::Flat;
+    }
+}
+
+VspEndCap readVspEndCap(const pugi::xml_node& parmContainer) {
+    VspEndCap ec;
+    const pugi::xml_node capNode = parmContainer.child("EndCap");
+    const pugi::xml_node src = capNode ? capNode : parmContainer;
+    ec.minType = toEndCapType(static_cast<int>(std::lround(readParmDouble(src, "CapUMinOption", 1.0))));
+    ec.minLength = readParmDouble(src, "CapUMinLength", 1.0);
+    ec.minStrength = readParmDouble(src, "CapUMinStrength", 0.5);
+    ec.maxType = toEndCapType(static_cast<int>(std::lround(readParmDouble(src, "CapUMaxOption", 1.0))));
+    ec.maxLength = readParmDouble(src, "CapUMaxLength", 1.0);
+    ec.maxStrength = readParmDouble(src, "CapUMaxStrength", 0.5);
+    return ec;
 }
 
 struct ResolvedXSecCurve {
@@ -286,6 +320,96 @@ void importWingGeom(const pugi::xml_node& geomNode, Aircraft& aircraft, ImportCo
         }
     }
 
+    const VspEndCap endCap = readVspEndCap(parm);
+    wing->setTipCapType(endCap.maxType);
+    wing->setTipCapLength(endCap.maxLength);
+    wing->setTipCapStrength(endCap.maxStrength);
+
+    // Import OpenVSP SubSurfaces (SS_Control -> ControlSurface)
+    std::string lowerWingName = name;
+    for (char& ch : lowerWingName) {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    const float rxAbs = std::abs(wing->getTransform().getRotationDeg().x);
+    const bool isVerticalTail = (rxAbs > 45.0f && rxAbs < 135.0f) ||
+        (lowerWingName.find("vert") != std::string::npos) ||
+        (lowerWingName.find("fin") != std::string::npos) ||
+        (lowerWingName.find("rudder") != std::string::npos);
+    const bool isHorizTail = (lowerWingName.find("horiz") != std::string::npos) ||
+        (lowerWingName.find("htail") != std::string::npos) ||
+        (lowerWingName.find("elev") != std::string::npos);
+
+    double totalWingSpan = 0.0;
+    for (const WingSection& sec : wing->getSections()) {
+        totalWingSpan += std::max(1e-4, sec.span().getValue());
+    }
+
+    auto parseSubSurfacesNode = [&](const pugi::xml_node& ssParent) {
+        if (!ssParent) {
+            return;
+        }
+        for (const pugi::xml_node ss : ssParent.children("SubSurface")) {
+            const pugi::xml_node ssParm = ss.child("ParmContainer");
+            const pugi::xml_node ctrl = ssParm.child("SS_Control");
+            if (!ctrl) {
+                continue;
+            }
+            const double eta0 = std::clamp(readParmDouble(ctrl, "EtaStart", 0.5), 0.0, 1.0);
+            const double eta1 = std::clamp(readParmDouble(ctrl, "EtaEnd", 0.9), 0.0, 1.0);
+            const double cStart = readParmDouble(ctrl, "Length_C_Start", 0.25);
+            const double cEnd = readParmDouble(ctrl, "Length_C_End", cStart);
+            const double chordFrac = std::clamp(0.5 * (cStart + cEnd), 0.05, 0.50);
+            if (eta1 <= eta0 + 1e-3) {
+                continue;
+            }
+
+            std::string ctrlName = readParmString(ssParm, "Name", "");
+            bool symmetric = true;
+            if (ctrlName.empty() || ctrlName == "SS_Control") {
+                if (isVerticalTail) {
+                    ctrlName = "Rudder";
+                    symmetric = true;
+                } else if (isHorizTail) {
+                    ctrlName = "Elevator";
+                    symmetric = true;
+                } else if (eta0 >= 0.45) {
+                    ctrlName = "Aileron";
+                    symmetric = false;
+                } else {
+                    ctrlName = "Flap";
+                    symmetric = true;
+                }
+            } else {
+                std::string lc = ctrlName;
+                for (char& ch : lc) {
+                    ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                }
+                symmetric = (lc.find("aileron") == std::string::npos);
+            }
+
+            // Map overall normalized span [eta0, eta1] across wing bays
+            double accum = 0.0;
+            for (std::size_t b = 0; b < wing->getSectionCount(); ++b) {
+                const double bSpan = std::max(1e-4, wing->getSection(b).span().getValue());
+                const double bFrac0 = accum / totalWingSpan;
+                accum += bSpan;
+                const double bFrac1 = accum / totalWingSpan;
+                const double o0 = std::max(eta0, bFrac0);
+                const double o1 = std::min(eta1, bFrac1);
+                if (o1 > o0 + 1e-3) {
+                    const double u0 = (o0 - bFrac0) / (bFrac1 - bFrac0);
+                    const double u1 = (o1 - bFrac0) / (bFrac1 - bFrac0);
+                    wing->addControlSurface(ControlSurface(ctrlName, b, u0, u1, chordFrac, 0.0, symmetric));
+                }
+            }
+        }
+    };
+
+    parseSubSurfacesNode(geomNode.child("SubSurfaces"));
+    if (const pugi::xml_node innerGeom = geomNode.child("Geom")) {
+        parseSubSurfacesNode(innerGeom.child("SubSurfaces"));
+    }
+
     wing->markDirty();
     wing->ensureBuilt();
     recordBodyBounds(ctx, *wing);
@@ -359,6 +483,7 @@ void importFuselageGeom(const pugi::xml_node& geomNode, Aircraft& aircraft, Impo
                 double botPower = -1.0;
                 double cornerFrac = 0.25;
                 double maxWidthLocFrac = 0.0;
+                GeneralFuseParams gfParams;
 
                 switch (curve.type) {
                 case 0: // XS_POINT
@@ -386,9 +511,7 @@ void importFuselageGeom(const pugi::xml_node& geomNode, Aircraft& aircraft, Impo
                         botPower = readParmDouble(curveParm, "Super_N_bot", topPower);
                     }
                     const double maxW = readParmDouble(curveParm, "Super_MaxWidthLoc", 0.0);
-                    if (rawHeight > 1e-4) {
-                        maxWidthLocFrac = 2.0 * maxW / rawHeight;
-                    }
+                    maxWidthLocFrac = maxW;
                     break;
                 }
                 case 4: { // XS_ROUNDED_RECTANGLE
@@ -401,17 +524,16 @@ void importFuselageGeom(const pugi::xml_node& geomNode, Aircraft& aircraft, Impo
                     break;
                 }
                 case 5: { // XS_GENERAL_FUSE
-                    shape = CrossSectionShape::SuperEllipse;
+                    shape = CrossSectionShape::GeneralFuse;
                     rawWidth = readParmDouble(curveParm, "Width", 1.5);
                     rawHeight = readParmDouble(curveParm, "Height", rawWidth);
-                    const double topStr = readParmDouble(curveParm, "TopStr", 0.83);
-                    const double botStr = readParmDouble(curveParm, "BotStr", 0.83);
-                    topPower = std::clamp(2.0 * (topStr / 0.83), 0.7, 6.0);
-                    botPower = std::clamp(2.0 * (botStr / 0.83), 0.7, 6.0);
-                    const double maxW = readParmDouble(curveParm, "MaxWidthLoc", 0.0);
-                    if (rawHeight > 1e-4) {
-                        maxWidthLocFrac = 2.0 * maxW / rawHeight;
-                    }
+                    gfParams.topStr = readParmDouble(curveParm, "TopStr", 0.83);
+                    gfParams.botStr = readParmDouble(curveParm, "BotStr", 0.83);
+                    gfParams.upStr = readParmDouble(curveParm, "UpStr", 0.83);
+                    gfParams.lowStr = readParmDouble(curveParm, "LowStr", 0.83);
+                    gfParams.topTanAngleDeg = readParmDouble(curveParm, "TopTanAngle", 90.0);
+                    gfParams.botTanAngleDeg = readParmDouble(curveParm, "BotTanAngle", 90.0);
+                    maxWidthLocFrac = readParmDouble(curveParm, "MaxWidthLoc", 0.0);
                     if (rawWidth < 1e-4 && rawHeight < 1e-4) {
                         shape = CrossSectionShape::Point;
                     }
@@ -436,9 +558,40 @@ void importFuselageGeom(const pugi::xml_node& geomNode, Aircraft& aircraft, Impo
                 sec.setBottomSuperEllipseN(botPower);
                 sec.setMaxWidthLocFrac(maxWidthLocFrac);
                 sec.cornerRadiusFrac().setValue(cornerFrac);
+                sec.setGeneralFuse(gfParams);
+
+                FuselageSkinning skin;
+                skin.enabled = true;
+                skin.topLAngleDeg = readParmDouble(xsecParm, "TopLAngle", 0.0);
+                skin.bottomLAngleDeg = readParmDouble(xsecParm, "BottomLAngle", skin.topLAngleDeg);
+                skin.leftLAngleDeg = readParmDouble(xsecParm, "LeftLAngle", skin.topLAngleDeg);
+                skin.rightLAngleDeg = readParmDouble(xsecParm, "RightLAngle", skin.leftLAngleDeg);
+                skin.topRAngleDeg = readParmDouble(xsecParm, "TopRAngle", 0.0);
+                skin.bottomRAngleDeg = readParmDouble(xsecParm, "BottomRAngle", skin.topRAngleDeg);
+                skin.leftRAngleDeg = readParmDouble(xsecParm, "LeftRAngle", skin.topRAngleDeg);
+                skin.rightRAngleDeg = readParmDouble(xsecParm, "RightRAngle", skin.leftRAngleDeg);
+                skin.topLStrength = readParmDouble(xsecParm, "TopLStrength", 1.0);
+                skin.bottomLStrength = readParmDouble(xsecParm, "BottomLStrength", skin.topLStrength);
+                skin.leftLStrength = readParmDouble(xsecParm, "LeftLStrength", skin.topLStrength);
+                skin.rightLStrength = readParmDouble(xsecParm, "RightLStrength", skin.leftLStrength);
+                skin.topRStrength = readParmDouble(xsecParm, "TopRStrength", 1.0);
+                skin.bottomRStrength = readParmDouble(xsecParm, "BottomRStrength", skin.topRStrength);
+                skin.leftRStrength = readParmDouble(xsecParm, "LeftRStrength", skin.topRStrength);
+                skin.rightRStrength = readParmDouble(xsecParm, "RightRStrength", skin.leftRStrength);
+                sec.setSkinning(skin);
+
                 fuse->appendSection(std::move(sec));
             }
         }
+
+        fuse->setAxialSubdivisions(14);
+        const VspEndCap endCap = readVspEndCap(parm);
+        fuse->setNoseCapType(endCap.minType);
+        fuse->setNoseCapLength(endCap.minLength);
+        fuse->setNoseCapStrength(endCap.minStrength);
+        fuse->setTailCapType(endCap.maxType);
+        fuse->setTailCapLength(endCap.maxLength);
+        fuse->setTailCapStrength(endCap.maxStrength);
 
         fuse->markDirty();
         fuse->ensureBuilt();
@@ -489,9 +642,15 @@ void importPodGeom(const pugi::xml_node& geomNode, Aircraft& aircraft, ImportCon
 }
 
 struct PCurveData {
+    int crvType{0}; // 0=Linear, 1=PCHIP, 2=CEDIT Cubic Bezier
     std::vector<std::pair<double, double>> points;
 
     bool empty() const noexcept { return points.empty(); }
+
+    static double evalCubicBezier(double p0, double p1, double p2, double p3, double t) noexcept {
+        const double u = 1.0 - t;
+        return u * u * u * p0 + 3.0 * u * u * t * p1 + 3.0 * u * t * t * p2 + t * t * t * p3;
+    }
 
     double eval(double r, double fallback) const noexcept {
         if (points.empty()) {
@@ -503,6 +662,78 @@ struct PCurveData {
         if (r >= points.back().first) {
             return points.back().second;
         }
+
+        // OpenVSP CEDIT (CrvType == 2): sequence of cubic Bezier spans (3*k + 1 points)
+        if (crvType == 2 && points.size() >= 4 && ((points.size() - 1) % 3 == 0)) {
+            for (std::size_t i = 0; i + 3 < points.size(); i += 3) {
+                const double r0 = points[i].first;
+                const double r1 = points[i + 1].first;
+                const double r2 = points[i + 2].first;
+                const double r3 = points[i + 3].first;
+                if (r <= r3) {
+                    double lo = 0.0;
+                    double hi = 1.0;
+                    for (int iter = 0; iter < 20; ++iter) {
+                        const double mid = 0.5 * (lo + hi);
+                        const double rMid = evalCubicBezier(r0, r1, r2, r3, mid);
+                        if (rMid < r) {
+                            lo = mid;
+                        } else {
+                            hi = mid;
+                        }
+                    }
+                    const double tBest = 0.5 * (lo + hi);
+                    return evalCubicBezier(
+                        points[i].second,
+                        points[i + 1].second,
+                        points[i + 2].second,
+                        points[i + 3].second,
+                        tBest
+                    );
+                }
+            }
+            return points.back().second;
+        }
+
+        // OpenVSP PCHIP (CrvType == 1): monotonic cubic Hermite
+        if (crvType == 1 && points.size() >= 3) {
+            const std::size_t n = points.size();
+            std::vector<double> h(n - 1);
+            std::vector<double> d(n - 1);
+            for (std::size_t i = 0; i + 1 < n; ++i) {
+                h[i] = std::max(1e-6, points[i + 1].first - points[i].first);
+                d[i] = (points[i + 1].second - points[i].second) / h[i];
+            }
+            std::vector<double> m(n, 0.0);
+            for (std::size_t i = 1; i + 1 < n; ++i) {
+                if (d[i - 1] * d[i] > 0.0) {
+                    const double w1 = 2.0 * h[i] + h[i - 1];
+                    const double w2 = h[i] + 2.0 * h[i - 1];
+                    m[i] = (w1 + w2) / (w1 / d[i - 1] + w2 / d[i]);
+                }
+            }
+            m[0] = ((2.0 * h[0] + h[1]) * d[0] - h[0] * d[1]) / (h[0] + h[1]);
+            if (m[0] * d[0] <= 0.0) {
+                m[0] = 0.0;
+            }
+            m[n - 1] = ((2.0 * h[n - 2] + h[n - 3]) * d[n - 2] - h[n - 2] * d[n - 3]) / (h[n - 2] + h[n - 3]);
+            if (m[n - 1] * d[n - 2] <= 0.0) {
+                m[n - 1] = 0.0;
+            }
+            for (std::size_t i = 0; i + 1 < n; ++i) {
+                if (r <= points[i + 1].first) {
+                    const double t = std::clamp((r - points[i].first) / h[i], 0.0, 1.0);
+                    const double t2 = t * t;
+                    const double t3 = t2 * t;
+                    return (2.0 * t3 - 3.0 * t2 + 1.0) * points[i].second +
+                        (t3 - 2.0 * t2 + t) * h[i] * m[i] +
+                        (-2.0 * t3 + 3.0 * t2) * points[i + 1].second +
+                        (t3 - t2) * h[i] * m[i + 1];
+                }
+            }
+            return points.back().second;
+        }
+
         for (std::size_t i = 0; i + 1 < points.size(); ++i) {
             if (r <= points[i + 1].first) {
                 const double dr = std::max(1e-6, points[i + 1].first - points[i].first);
@@ -524,6 +755,8 @@ PCurveData readPCurve(const pugi::xml_node& propGeomNode, const char* groupName,
     if (!container) {
         return data;
     }
+
+    data.crvType = static_cast<int>(std::lround(readParmDouble(container, "CrvType", 0.0)));
 
     for (int idx = 0; idx < 32; ++idx) {
         const std::string rKey = "r_" + std::to_string(idx);
@@ -599,13 +832,16 @@ void importPropGeom(const pugi::xml_node& geomNode, Aircraft& aircraft, ImportCo
     const PCurveData chordCurve = propGeom ? readPCurve(propGeom, "Chord", "crd") : PCurveData{};
     const PCurveData twistCurve = propGeom ? readPCurve(propGeom, "Twist", "tw") : PCurveData{};
     const PCurveData sweepCurve = propGeom ? readPCurve(propGeom, "Sweep", "sw") : PCurveData{};
+    const PCurveData skewCurve = propGeom ? readPCurve(propGeom, "Skew", "skw") : PCurveData{};
+    const PCurveData tanCurve = propGeom ? readPCurve(propGeom, "Tangential", "tan") : PCurveData{};
     const PCurveData rakeCurve = propGeom ? readPCurve(propGeom, "Rake", "rak") : PCurveData{};
+    const PCurveData thickCurve = propGeom ? readPCurve(propGeom, "Thick", "toc") : PCurveData{};
 
     if (!chordCurve.empty() || !twistCurve.empty()) {
         const double rMin = !chordCurve.empty() ? chordCurve.points.front().first : hubFrac;
         const double rMax = !chordCurve.empty() ? chordCurve.points.back().first : 1.0;
 
-        constexpr int kCurveSamples = 17;
+        constexpr int kCurveSamples = 21;
         std::vector<Propeller::BladeStation> stations;
         stations.reserve(kCurveSamples);
 
@@ -619,8 +855,14 @@ void importPropGeom(const pugi::xml_node& geomNode, Aircraft& aircraft, ImportCo
             st.radiusFrac = r;
             st.chord = std::max(0.01, chordCurve.eval(r, fallbackCrd) * radiusM);
             st.twistDeg = twistCurve.empty() ? beta34 : (twistCurve.eval(r, beta34) + featherDeg);
-            st.sweepOffset = sweepCurve.eval(r, 0.0) * radiusM;
+            const double tangOffset = !tanCurve.empty()
+                ? tanCurve.eval(r, 0.0)
+                : (sweepCurve.eval(r, 0.0) + skewCurve.eval(r, 0.0));
+            st.sweepOffset = tangOffset * radiusM;
             st.rakeOffset = rakeCurve.eval(r, 0.0) * radiusM;
+            if (!thickCurve.empty()) {
+                st.thicknessRatio = std::clamp(thickCurve.eval(r, 0.12), 0.02, 0.85);
+            }
             stations.push_back(st);
         }
 
@@ -636,6 +878,9 @@ void importPropGeom(const pugi::xml_node& geomNode, Aircraft& aircraft, ImportCo
         prop->tipChord().setValue(std::clamp(estChordM * 0.72, 0.02, 3.0));
         prop->collectivePitchDeg().setValue(readParmDouble(parm, "Beta34", 24.0));
     }
+
+    const VspEndCap propCap = readVspEndCap(parm);
+    prop->setTipCapType(propCap.maxType);
 
     prop->markDirty();
     prop->ensureBuilt();

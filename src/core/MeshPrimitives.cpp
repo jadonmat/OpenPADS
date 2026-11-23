@@ -85,9 +85,9 @@ void MeshPrimitives::appendLoftedRings(
             const glm::vec3 n1 = glm::cross(v01 - v00, v10 - v00);
             const glm::vec3 n2 = glm::cross(v01 - v10, v11 - v10);
 
-            normals[idxAt(r, p)] += n1;
+            normals[idxAt(r, p)] += n1 + n2;
             normals[idxAt(r + 1, p)] += n1 + n2;
-            normals[idxAt(r + 1, p + 1)] += n2;
+            normals[idxAt(r + 1, p + 1)] += n1 + n2;
             normals[idxAt(r, p + 1)] += n1 + n2;
         }
     }
@@ -143,6 +143,84 @@ void MeshPrimitives::appendLoftedRings(
         }
         appendCapFan(mesh, rings.back(), axisDir, false);
     }
+}
+
+void MeshPrimitives::appendEndCap(
+    Mesh& mesh,
+    const std::vector<glm::vec3>& endRing,
+    const glm::vec3& outwardAxisUnit,
+    EndCapType capType,
+    double capLengthRatio,
+    double capStrength,
+    bool closedSeam,
+    bool reverseWinding
+) {
+    if (capType == EndCapType::None || endRing.size() < 4) {
+        return;
+    }
+
+    const float axisLen = glm::length(outwardAxisUnit);
+    const glm::vec3 axis = (axisLen > 1e-6f) ? (outwardAxisUnit / axisLen) : glm::vec3(1.0f, 0.0f, 0.0f);
+
+    if (capType == EndCapType::Flat) {
+        appendCapFan(mesh, endRing, axis, reverseWinding);
+        return;
+    }
+
+    const std::size_t uniqueCount = endRing.size() - 1;
+    glm::vec3 center(0.0f);
+    for (std::size_t i = 0; i < uniqueCount; ++i) {
+        center += endRing[i];
+    }
+    center /= static_cast<float>(uniqueCount);
+
+    float avgRadius = 0.0f;
+    for (std::size_t i = 0; i < uniqueCount; ++i) {
+        avgRadius += glm::length(endRing[i] - center);
+    }
+    avgRadius /= static_cast<float>(uniqueCount);
+    if (avgRadius < 1e-5f) {
+        return;
+    }
+
+    const float lengthScale = static_cast<float>(std::clamp(capLengthRatio, 0.05, 8.0));
+    const float protrude = lengthScale * avgRadius;
+    const float str = static_cast<float>(std::clamp(capStrength, 0.1, 2.0));
+    const float axialExp = std::clamp(1.0f / std::max(str, 0.25f), 0.55f, 1.8f);
+
+    const int steps = (capType == EndCapType::Sharp) ? 3 : 6;
+    std::vector<std::vector<glm::vec3>> capRings;
+    capRings.reserve(static_cast<std::size_t>(steps) + 1);
+
+    for (int s = 0; s <= steps; ++s) {
+        const float u = static_cast<float>(s) / static_cast<float>(steps);
+        const float axialFrac = (capType == EndCapType::Sharp)
+            ? u
+            : std::pow(std::sin(0.5f * std::numbers::pi_v<float> * u), axialExp);
+        const float radScale = (capType == EndCapType::Sharp)
+            ? (1.0f - u)
+            : std::cos(0.5f * std::numbers::pi_v<float> * u);
+
+        std::vector<glm::vec3> ring;
+        ring.reserve(endRing.size());
+        for (const glm::vec3& pt : endRing) {
+            const glm::vec3 radialVec = pt - center;
+            if (capType == EndCapType::Edge) {
+                // Collapse thinner planar component while preserving wider edge.
+                const float yScale = radScale;
+                const glm::vec3 edgePt = center + glm::vec3(radialVec.x * yScale, radialVec.y * yScale, radialVec.z * (0.25f + 0.75f * yScale));
+                ring.push_back(edgePt + axis * (protrude * axialFrac));
+            } else {
+                ring.push_back(center + radialVec * radScale + axis * (protrude * axialFrac));
+            }
+        }
+        capRings.push_back(std::move(ring));
+    }
+
+    if (reverseWinding) {
+        std::reverse(capRings.begin(), capRings.end());
+    }
+    appendLoftedRings(mesh, capRings, closedSeam, false, false);
 }
 
 void MeshPrimitives::appendCylinder(

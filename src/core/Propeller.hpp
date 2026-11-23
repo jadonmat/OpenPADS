@@ -6,6 +6,7 @@
 
 #include "core/Airfoil.hpp"
 #include "core/Component.hpp"
+#include "core/MeshPrimitives.hpp"
 #include "core/Parameter.hpp"
 
 namespace opads {
@@ -20,6 +21,7 @@ public:
         double twistDeg{20.0};
         double sweepOffset{0.0};
         double rakeOffset{0.0};
+        double thicknessRatio{-1.0};
     };
 
     Propeller(std::uint64_t id, std::string name = "Propeller");
@@ -64,6 +66,9 @@ public:
     bool hasSpinner() const noexcept;
     void setHasSpinner(bool enabled);
 
+    EndCapType getTipCapType() const noexcept;
+    void setTipCapType(EndCapType type);
+
     const std::vector<BladeStation>& getBladeCurve() const noexcept;
     void setBladeCurve(std::vector<BladeStation> stations);
     void clearBladeCurve();
@@ -91,6 +96,7 @@ private:
     bool m_clockwise{true};
     bool m_showDiskRing{true};
     bool m_hasSpinner{true};
+    EndCapType m_tipCapType{EndCapType::Flat};
     std::vector<BladeStation> m_bladeCurve;
     Airfoil m_bladeAirfoil;
 };

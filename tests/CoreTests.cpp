@@ -620,8 +620,8 @@ TEST_CASE("OpenVspImporter accurately imports nested Fuselage, Pod, Propeller PC
     REQUIRE(fuse->getSectionCount() == 3);
     REQUIRE(fuse->getSection(1).width().getValue() == Catch::Approx(8.75 * 0.3048).margin(1e-3));
     REQUIRE(fuse->getSection(1).height().getValue() == Catch::Approx(9.84 * 0.3048).margin(1e-3));
-    REQUIRE(fuse->getSection(1).getShape() == opads::CrossSectionShape::SuperEllipse);
-    REQUIRE(fuse->getSection(1).getBottomSuperEllipseN() < fuse->getSection(1).superEllipseN().getValue());
+    REQUIRE(fuse->getSection(1).getShape() == opads::CrossSectionShape::GeneralFuse);
+    REQUIRE(fuse->getSection(1).getGeneralFuse().botStr < fuse->getSection(1).getGeneralFuse().topStr);
     REQUIRE(fuse->getSection(2).getShape() == opads::CrossSectionShape::Circle);
     REQUIRE(fuse->getSection(2).width().getValue() == Catch::Approx(2.0 * 0.3048).margin(1e-3));
 
@@ -680,6 +680,31 @@ TEST_CASE("OpenVspImporter accurately imports nested Fuselage, Pod, Propeller PC
         REQUIRE(mainFuseTyped != nullptr);
         REQUIRE(mainFuseTyped->length().getValue() == Catch::Approx(87.0 * 0.3048).margin(0.05));
         REQUIRE(mainFuseTyped->getMaxWidth() == Catch::Approx(8.75 * 0.3048).margin(0.05));
+        REQUIRE(mainFuseTyped->getSection(0).getSkinning().enabled);
+        REQUIRE(mainFuseTyped->getSection(0).getSkinning().topRAngleDeg == Catch::Approx(45.0).margin(0.1));
+        REQUIRE(mainFuseTyped->getSection(1).getShape() == opads::CrossSectionShape::GeneralFuse);
+        REQUIRE(mainFuseTyped->getSection(1).getMaxWidthLocFrac() == Catch::Approx(-0.3048).margin(1e-3));
+        REQUIRE(mainFuseTyped->getTailCapType() == opads::EndCapType::Round);
+
+        // Verify imported OpenVSP control surfaces (SS_Control) and tip caps
+        const auto* mainWing = dynamic_cast<const opads::Wing*>(findByName("MainWingBody"));
+        REQUIRE(mainWing != nullptr);
+        REQUIRE(mainWing->getControlSurfaceCount() == 1);
+        REQUIRE(mainWing->getControlSurface(0).spanStartFrac().getValue() == Catch::Approx(0.725).margin(1e-3));
+        REQUIRE(mainWing->getControlSurface(0).spanEndFrac().getValue() == Catch::Approx(0.95).margin(1e-3));
+
+        const auto* vTail = dynamic_cast<const opads::Wing*>(findByName("VerticalStabilizer"));
+        REQUIRE(vTail != nullptr);
+        REQUIRE(vTail->getTipCapType() == opads::EndCapType::Round);
+        REQUIRE(vTail->getControlSurfaceCount() == 1);
+
+        const auto* hTail = dynamic_cast<const opads::Wing*>(findByName("HorizStab"));
+        REQUIRE(hTail != nullptr);
+        REQUIRE(hTail->getControlSurfaceCount() == 1);
+
+        // Tail RoundedRect cross section should close seamlessly without a seam jump
+        const auto tailLoop = mainFuseTyped->getSection(5).sampleLoopYZ(32);
+        REQUIRE(glm::length(tailLoop.front() - tailLoop.back()) < 1e-4f);
 
         const auto* leftEngine = dynamic_cast<const opads::Fuselage*>(findByName("LeftEngine"));
         REQUIRE(leftEngine != nullptr);
@@ -690,5 +715,95 @@ TEST_CASE("OpenVspImporter accurately imports nested Fuselage, Pod, Propeller PC
         REQUIRE(leftProp->getBladeCount() == 8);
         REQUIRE(leftProp->diameter().getValue() == Catch::Approx(13.48425 * 0.3048).margin(0.05));
         REQUIRE(leftProp->getSolidity() > 0.35);
+        REQUIRE(leftProp->getBladeCurve().front().thicknessRatio > 0.35);
+        REQUIRE(leftProp->getBladeCurve().back().thicknessRatio < 0.06);
+        REQUIRE(std::abs(leftProp->getBladeCurve().back().sweepOffset) > 0.1);
+
+        // Verify all imported components produce valid finite unit normals and triangles
+        for (const auto& comp : realAc.getComponents()) {
+            const auto& m = comp->getMesh();
+            REQUIRE(m.getTriangleCount() > 0);
+            for (const opads::Vertex& v : m.getVertices()) {
+                REQUIRE(std::isfinite(v.position.x));
+                REQUIRE(std::isfinite(v.position.y));
+                REQUIRE(std::isfinite(v.position.z));
+                REQUIRE(glm::length(v.normal) == Catch::Approx(1.0f).margin(1e-2f));
+            }
+        }
+    }
+}
+
+TEST_CASE("Fuselage Hermite skinning and RoundedRect seam closure produce valid geometry", "[core][fuselage][propeller]") {
+    // RoundedRect taller than wide closes identically at front and back
+    opads::FuselageSection rr(opads::CrossSectionShape::RoundedRect, 1.0, 0.25, 0.72);
+    rr.cornerRadiusFrac().setValue(0.5);
+    const auto rrLoop = rr.sampleLoopYZ(32);
+    REQUIRE(rrLoop.size() == 33);
+    REQUIRE(glm::length(rrLoop.front() - rrLoop.back()) < 1e-5f);
+
+    // 45-deg Hermite nose should be significantly fuller (larger volume) than collapsed unskinned nose
+    auto buildNoseTest = [](std::uint64_t compId, bool enableSkin) {
+        auto f = std::make_unique<opads::Fuselage>(compId, "NoseTest");
+        f->clearSections();
+        f->length().setValue(10.0);
+        f->setAxialSubdivisions(8);
+        f->setRadialPoints(24);
+        opads::FuselageSection s0(opads::CrossSectionShape::Point, 0.0, 0.0, 0.0, 0.0);
+        opads::FuselageSection s1(opads::CrossSectionShape::Circle, 0.25, 2.0, 2.0, 0.0);
+        opads::FuselageSection s2(opads::CrossSectionShape::Circle, 1.0, 2.0, 2.0, 0.0);
+        if (enableSkin) {
+            s0.skinning().enabled = true;
+            s0.skinning().topRAngleDeg = s0.skinning().bottomRAngleDeg =
+                s0.skinning().leftRAngleDeg = s0.skinning().rightRAngleDeg = 55.0;
+            s1.skinning().enabled = true;
+        }
+        f->appendSection(s0);
+        f->appendSection(s1);
+        f->appendSection(s2);
+        f->ensureBuilt();
+        return f;
+    };
+
+    const auto unskinned = buildNoseTest(1, false);
+    auto skinned = buildNoseTest(2, true);
+    REQUIRE(skinned->getVolume() > unskinned->getVolume() + 0.5);
+
+    // Skinning round-trip serialization
+    opads::Aircraft ac("SkinRoundTrip");
+    ac.addComponent(buildNoseTest(ac.allocateComponentId(), true));
+    const std::string saved = opads::ProjectSerializer::saveToString(ac);
+    opads::Aircraft reloaded;
+    REQUIRE(opads::ProjectSerializer::loadFromString(reloaded, saved));
+    const auto* fReloaded = dynamic_cast<const opads::Fuselage*>(reloaded.getComponents()[0].get());
+    REQUIRE(fReloaded != nullptr);
+    REQUIRE(fReloaded->getSection(0).getSkinning().enabled);
+    REQUIRE(fReloaded->getSection(0).getSkinning().topRAngleDeg == Catch::Approx(55.0));
+
+    // Propeller blades must have outward-facing triangle winding for both CW and CCW rotation
+    for (bool cw : {true, false}) {
+        opads::Propeller prop(2, "OutwardProp");
+        prop.setClockwise(cw);
+        prop.setBladeCount(2);
+        prop.ensureBuilt();
+        const auto& verts = prop.getMesh().getVertices();
+        const auto& idx = prop.getMesh().getIndices();
+        int nonDegen = 0;
+        int outwardScore = 0;
+        for (std::size_t t = 0; t + 2 < idx.size(); t += 3) {
+            const glm::vec3& a = verts[idx[t]].position;
+            const glm::vec3& b = verts[idx[t + 1]].position;
+            const glm::vec3& c = verts[idx[t + 2]].position;
+            const glm::vec3 fn = glm::cross(b - a, c - a);
+            if (glm::length(fn) < 1e-8f) {
+                continue;
+            }
+            ++nonDegen;
+            const glm::vec3 avgVertN = verts[idx[t]].normal + verts[idx[t + 1]].normal + verts[idx[t + 2]].normal;
+            if (glm::dot(fn, avgVertN) > 0.0f) {
+                ++outwardScore;
+            }
+        }
+        REQUIRE(nonDegen > 100);
+        REQUIRE(outwardScore == nonDegen);
     }
 }

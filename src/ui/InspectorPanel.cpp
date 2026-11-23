@@ -434,6 +434,16 @@ void InspectorPanel::renderFuselageLoftTab(Fuselage& fuselage) {
         fuselage.setCapEnds(capEnds);
     }
 
+    const char* capNames[] = {"None", "Flat", "Round", "Edge", "Sharp"};
+    int noseCap = static_cast<int>(fuselage.getNoseCapType());
+    if (ImGui::Combo("Nose Cap", &noseCap, capNames, 5)) {
+        fuselage.setNoseCapType(static_cast<EndCapType>(noseCap));
+    }
+    int tailCap = static_cast<int>(fuselage.getTailCapType());
+    if (ImGui::Combo("Tail Cap", &tailCap, capNames, 5)) {
+        fuselage.setTailCapType(static_cast<EndCapType>(tailCap));
+    }
+
     int radialPts = fuselage.getRadialPoints();
     if (ImGui::SliderInt("Radial Pts", &radialPts, 12, 72)) {
         fuselage.setRadialPoints(radialPts);
@@ -478,12 +488,12 @@ void InspectorPanel::renderFuselageSectionsTab(Fuselage& fuselage) {
         fuselage.setSelectedSection(selectedIdx);
     }
 
-    const char* shapeNames[] = {"Point", "Circle", "Ellipse", "SuperEllipse", "RoundedRect"};
+    const char* shapeNames[] = {"Point", "Circle", "Ellipse", "SuperEllipse", "RoundedRect", "GeneralFuse"};
 
     if (ImGui::BeginListBox("##FuseXSecList", ImVec2(-1.0f, 90.0f))) {
         for (std::size_t i = 0; i < fuselage.getSectionCount(); ++i) {
             const FuselageSection& sec = fuselage.getSection(i);
-            const int sIdx = static_cast<int>(sec.getShape());
+            const int sIdx = std::clamp(static_cast<int>(sec.getShape()), 0, 5);
             const std::string label =
                 "XSec " + std::to_string(i) +
                 " [" + shapeNames[sIdx] + "]  u=" +
@@ -500,7 +510,7 @@ void InspectorPanel::renderFuselageSectionsTab(Fuselage& fuselage) {
     bool changed = false;
 
     int shapeIdx = static_cast<int>(sec.getShape());
-    if (ImGui::Combo("Shape", &shapeIdx, shapeNames, 5)) {
+    if (ImGui::Combo("Shape", &shapeIdx, shapeNames, 6)) {
         sec.setShape(static_cast<CrossSectionShape>(shapeIdx));
         changed = true;
     }
@@ -519,6 +529,53 @@ void InspectorPanel::renderFuselageSectionsTab(Fuselage& fuselage) {
         changed |= editParameterDrag(sec.superEllipseN());
     } else if (sec.getShape() == CrossSectionShape::RoundedRect) {
         changed |= editParameterDrag(sec.cornerRadiusFrac());
+    } else if (sec.getShape() == CrossSectionShape::GeneralFuse) {
+        GeneralFuseParams& gf = sec.generalFuse();
+        float maxW = static_cast<float>(sec.getMaxWidthLocFrac());
+        if (ImGui::SliderFloat("Max Width Loc", &maxW, -0.85f, 0.85f, "%.3f")) {
+            sec.setMaxWidthLocFrac(maxW);
+            changed = true;
+        }
+        float topStr = static_cast<float>(gf.topStr);
+        if (ImGui::SliderFloat("Top Strength", &topStr, 0.1f, 2.0f, "%.2f")) {
+            gf.topStr = topStr;
+            changed = true;
+        }
+        float botStr = static_cast<float>(gf.botStr);
+        if (ImGui::SliderFloat("Bot Strength", &botStr, 0.1f, 2.0f, "%.2f")) {
+            gf.botStr = botStr;
+            changed = true;
+        }
+    }
+
+    if (ImGui::TreeNode("Skinning Tangents")) {
+        FuselageSkinning& sk = sec.skinning();
+        if (ImGui::Checkbox("Explicit Skinning", &sk.enabled)) {
+            changed = true;
+        }
+        if (sk.enabled) {
+            float rAngle = static_cast<float>(sk.topRAngleDeg);
+            if (ImGui::SliderFloat("Aft/Right Angle (deg)", &rAngle, -89.0f, 89.0f, "%.1f")) {
+                sk.topRAngleDeg = sk.bottomRAngleDeg = sk.leftRAngleDeg = sk.rightRAngleDeg = rAngle;
+                changed = true;
+            }
+            float lAngle = static_cast<float>(sk.topLAngleDeg);
+            if (ImGui::SliderFloat("Fwd/Left Angle (deg)", &lAngle, -89.0f, 89.0f, "%.1f")) {
+                sk.topLAngleDeg = sk.bottomLAngleDeg = sk.leftLAngleDeg = sk.rightLAngleDeg = lAngle;
+                changed = true;
+            }
+            float rStr = static_cast<float>(sk.topRStrength);
+            if (ImGui::SliderFloat("Aft/Right Strength", &rStr, 0.1f, 2.5f, "%.2f")) {
+                sk.topRStrength = sk.bottomRStrength = sk.leftRStrength = sk.rightRStrength = rStr;
+                changed = true;
+            }
+            float lStr = static_cast<float>(sk.topLStrength);
+            if (ImGui::SliderFloat("Fwd/Left Strength", &lStr, 0.1f, 2.5f, "%.2f")) {
+                sk.topLStrength = sk.bottomLStrength = sk.leftLStrength = sk.rightLStrength = lStr;
+                changed = true;
+            }
+        }
+        ImGui::TreePop();
     }
 
     if (changed) {

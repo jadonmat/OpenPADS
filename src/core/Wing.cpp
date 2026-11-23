@@ -105,11 +105,103 @@ void appendAirfoilCap(
     }
 }
 
+void appendRoundWingTipCap(
+    Mesh& mesh,
+    const std::vector<glm::vec3>& tipRing,
+    const glm::vec3& tipNormal,
+    double capLengthRatio,
+    bool reverseWinding
+) {
+    const std::size_t total = tipRing.size();
+    if (total < 5) {
+        return;
+    }
+    const std::size_t half = total / 2;
+    float maxThick = 0.0f;
+    for (std::size_t k = 0; k <= half; ++k) {
+        const float d = glm::length(tipRing[k] - tipRing[total - 1 - k]);
+        maxThick = std::max(maxThick, d);
+    }
+    const float protrude = 0.5f * maxThick * static_cast<float>(std::clamp(capLengthRatio, 0.1, 6.0));
+    if (protrude < 1e-5f) {
+        appendAirfoilCap(mesh, tipRing, tipNormal, reverseWinding);
+        return;
+    }
+
+    constexpr int kSteps = 4;
+    std::vector<std::vector<glm::vec3>> capRings;
+    capRings.reserve(kSteps + 1);
+    for (int s = 0; s <= kSteps; ++s) {
+        const float u = static_cast<float>(s) / static_cast<float>(kSteps);
+        const float theta = 0.5f * std::numbers::pi_v<float> * u;
+        const float thickScale = std::cos(theta);
+        const float spanPush = protrude * std::sin(theta);
+
+        std::vector<glm::vec3> ring(total);
+        for (std::size_t k = 0; k <= half; ++k) {
+            const std::size_t lIdx = total - 1 - k;
+            const glm::vec3 mid = 0.5f * (tipRing[k] + tipRing[lIdx]);
+            ring[k] = mid + (tipRing[k] - mid) * thickScale + tipNormal * spanPush;
+            ring[lIdx] = mid + (tipRing[lIdx] - mid) * thickScale + tipNormal * spanPush;
+        }
+        capRings.push_back(std::move(ring));
+    }
+
+    // Reorder ring points so appendLoftedRings winds outward consistently with wing half.
+    const std::size_t ringCount = capRings.size();
+    std::vector<glm::vec3> normals(ringCount * total, glm::vec3(0.0f));
+    const auto idxAt = [total](std::size_t r, std::size_t p) { return r * total + p; };
+    for (std::size_t r = 0; r + 1 < ringCount; ++r) {
+        for (std::size_t p = 0; p + 1 < total; ++p) {
+            const glm::vec3& v00 = capRings[r][p];
+            const glm::vec3& v10 = capRings[r + 1][p];
+            const glm::vec3& v11 = capRings[r + 1][p + 1];
+            const glm::vec3& v01 = capRings[r][p + 1];
+            glm::vec3 n1 = glm::cross(v10 - v00, v11 - v00);
+            glm::vec3 n2 = glm::cross(v11 - v00, v01 - v00);
+            if (reverseWinding) {
+                n1 = -n1;
+                n2 = -n2;
+            }
+            normals[idxAt(r, p)] += n1 + n2;
+            normals[idxAt(r + 1, p)] += n1 + n2;
+            normals[idxAt(r + 1, p + 1)] += n1 + n2;
+            normals[idxAt(r, p + 1)] += n1 + n2;
+        }
+    }
+
+    const auto base = static_cast<std::uint32_t>(mesh.getVertexCount());
+    for (std::size_t r = 0; r < ringCount; ++r) {
+        for (std::size_t p = 0; p < total; ++p) {
+            glm::vec3 n = normals[idxAt(r, p)];
+            const float len = glm::length(n);
+            n = (len > 1e-7f) ? (n / len) : tipNormal;
+            mesh.addVertex(capRings[r][p], n);
+        }
+    }
+    for (std::size_t r = 0; r + 1 < ringCount; ++r) {
+        for (std::size_t p = 0; p + 1 < total; ++p) {
+            const auto i00 = base + static_cast<std::uint32_t>(idxAt(r, p));
+            const auto i10 = base + static_cast<std::uint32_t>(idxAt(r + 1, p));
+            const auto i11 = base + static_cast<std::uint32_t>(idxAt(r + 1, p + 1));
+            const auto i01 = base + static_cast<std::uint32_t>(idxAt(r, p + 1));
+            if (!reverseWinding) {
+                mesh.addTriangle(i00, i10, i11);
+                mesh.addTriangle(i00, i11, i01);
+            } else {
+                mesh.addTriangle(i00, i11, i10);
+                mesh.addTriangle(i00, i01, i11);
+            }
+        }
+    }
+}
+
 void appendWingHalf(
     Mesh& mesh,
     const std::vector<std::vector<glm::vec3>>& rings,
     bool capRoot,
-    bool capTip,
+    EndCapType tipCapType,
+    double tipCapLength,
     bool mirrorY
 ) {
     if (rings.size() < 2) {
@@ -191,11 +283,15 @@ void appendWingHalf(
         appendAirfoilCap(mesh, workRings.front(), rootNormal, !mirrorY);
     }
 
-    if (capTip) {
+    if (tipCapType != EndCapType::None) {
         glm::vec3 spanDir = workRings[ringCount - 1][0] - workRings[ringCount - 2][0];
         const float len = glm::length(spanDir);
         const glm::vec3 tipNormal = (len > 1e-6f) ? (spanDir / len) : glm::vec3(0.0f, mirrorY ? -1.0f : 1.0f, 0.0f);
-        appendAirfoilCap(mesh, workRings.back(), tipNormal, mirrorY);
+        if (tipCapType == EndCapType::Round || tipCapType == EndCapType::Edge) {
+            appendRoundWingTipCap(mesh, workRings.back(), tipNormal, tipCapLength, mirrorY);
+        } else {
+            appendAirfoilCap(mesh, workRings.back(), tipNormal, mirrorY);
+        }
     }
 }
 
@@ -253,7 +349,11 @@ std::vector<glm::vec3> sampleControlSurfaceOutline(
     const glm::vec3 teStart = rotateAroundAxis(rStart.front(), hStart, hUnit, rad);
     const glm::vec3 teEnd = rotateAroundAxis(rEnd.front(), hEnd, hUnit, rad);
 
-    return {hStart, hEnd, teEnd, teStart, hStart};
+    const std::size_t hingeLowerIdx = n - 1 - hingeUpperIdx;
+    const glm::vec3 hLowStart = rStart[hingeLowerIdx];
+    const glm::vec3 hLowEnd = rEnd[hingeLowerIdx];
+
+    return {hStart, hEnd, teEnd, teStart, hStart, hLowStart, hLowEnd, teEnd, teStart, hLowStart};
 }
 
 double computeMeshSurfaceArea(const Mesh& mesh) noexcept {
@@ -340,14 +440,44 @@ void Wing::setSymmetry(SymmetryMode mode) {
 }
 
 bool Wing::getCapTips() const noexcept {
-    return m_capTips;
+    return m_capTips && m_tipCapType != EndCapType::None;
 }
 
 void Wing::setCapTips(bool cap) {
-    if (m_capTips != cap) {
+    const EndCapType targetType = cap ? (m_tipCapType == EndCapType::None ? EndCapType::Flat : m_tipCapType) : EndCapType::None;
+    if (m_capTips != cap || m_tipCapType != targetType) {
         m_capTips = cap;
+        m_tipCapType = targetType;
         markDirty();
     }
+}
+
+EndCapType Wing::getTipCapType() const noexcept { return m_tipCapType; }
+void Wing::setTipCapType(EndCapType type) {
+    if (m_tipCapType != type || m_capTips != (type != EndCapType::None)) {
+        m_tipCapType = type;
+        m_capTips = (type != EndCapType::None);
+        markDirty();
+    }
+}
+
+double Wing::getTipCapLength() const noexcept { return m_tipCapLength; }
+void Wing::setTipCapLength(double lengthRatio) {
+    const double c = std::clamp(lengthRatio, 0.1, 6.0);
+    if (std::abs(m_tipCapLength - c) > 1e-6) {
+        m_tipCapLength = c;
+        markDirty();
+    }
+}
+
+double Wing::getTipCapStrength() const noexcept { return m_tipCapStrength; }
+void Wing::setTipCapStrength(double strength) {
+    m_tipCapStrength = std::clamp(strength, 0.1, 2.0);
+    markDirty();
+}
+
+const std::vector<std::vector<glm::vec3>>& Wing::getControlSurfaceOutlines() const noexcept {
+    return m_controlSurfaceOutlines;
 }
 
 int Wing::getChordPoints() const noexcept {
@@ -790,13 +920,13 @@ void Wing::rebuildMesh() {
         return loftRings;
     };
 
-    const bool capRoot = m_capTips && (m_symmetry == SymmetryMode::None);
+    const bool capRoot = (m_tipCapType != EndCapType::None) && (m_symmetry == SymmetryMode::None);
     const std::vector<std::vector<glm::vec3>> rightRings = buildHalfRings(1.0f);
-    appendWingHalf(m_mesh, rightRings, capRoot, m_capTips, false);
+    appendWingHalf(m_mesh, rightRings, capRoot, m_tipCapType, m_tipCapLength, false);
 
     if (m_symmetry == SymmetryMode::XZ) {
         const std::vector<std::vector<glm::vec3>> leftRings = buildHalfRings(-1.0f);
-        appendWingHalf(m_mesh, leftRings, false, m_capTips, true);
+        appendWingHalf(m_mesh, leftRings, false, m_tipCapType, m_tipCapLength, true);
     }
 
     m_wettedArea = computeMeshSurfaceArea(m_mesh);

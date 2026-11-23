@@ -9,6 +9,7 @@
 
 #include "core/Component.hpp"
 #include "core/ControlSurface.hpp"
+#include "core/MeshPrimitives.hpp"
 #include "core/WingSection.hpp"
 
 namespace opads {
@@ -27,6 +28,15 @@ public:
 
     bool getCapTips() const noexcept;
     void setCapTips(bool cap);
+
+    EndCapType getTipCapType() const noexcept;
+    void setTipCapType(EndCapType type);
+    double getTipCapLength() const noexcept;
+    void setTipCapLength(double lengthRatio);
+    double getTipCapStrength() const noexcept;
+    void setTipCapStrength(double strength);
+
+    const std::vector<std::vector<glm::vec3>>& getControlSurfaceOutlines() const noexcept;
 
     int getChordPoints() const noexcept;
     void setChordPoints(int pointsPerSurface);
@@ -82,6 +92,9 @@ private:
     std::vector<ControlSurface> m_controlSurfaces;
     SymmetryMode m_symmetry{SymmetryMode::XZ};
     bool m_capTips{true};
+    EndCapType m_tipCapType{EndCapType::Flat};
+    double m_tipCapLength{1.0};
+    double m_tipCapStrength{0.5};
     int m_chordPoints{41};
     std::size_t m_selectedCrossSection{0};
 

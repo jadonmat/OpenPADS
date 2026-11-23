@@ -2,9 +2,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numbers>
 #include <utility>
 
 #include <glm/geometric.hpp>
+#include <glm/trigonometric.hpp>
 
 namespace opads {
 
@@ -70,45 +72,75 @@ float evalHermite(float x0, float x1, float y0, float y1, float m0, float m1, fl
     return h00 * y0 + h10 * h * m0 + h01 * y1 + h11 * h * m1;
 }
 
-void appendCapFan(
-    Mesh& mesh,
-    const std::vector<glm::vec3>& ring,
-    const glm::vec3& normal,
-    bool reverseWinding
-) {
-    if (ring.size() < 4) {
-        return;
-    }
-    const std::size_t uniqueCount = ring.size() - 1;
-    glm::vec3 center(0.0f);
-    float maxRadiusSq = 0.0f;
-    for (std::size_t i = 0; i < uniqueCount; ++i) {
-        center += ring[i];
-    }
-    center /= static_cast<float>(uniqueCount);
-    for (std::size_t i = 0; i < uniqueCount; ++i) {
-        const glm::vec3 d = ring[i] - center;
-        maxRadiusSq = std::max(maxRadiusSq, glm::dot(d, d));
-    }
-    if (maxRadiusSq < 1e-8f) {
-        return;
-    }
+glm::vec3 evalHermiteVec3(
+    const glm::vec3& p0,
+    const glm::vec3& p1,
+    const glm::vec3& t0,
+    const glm::vec3& t1,
+    float u
+) noexcept {
+    const float u2 = u * u;
+    const float u3 = u2 * u;
+    const float h00 = 2.0f * u3 - 3.0f * u2 + 1.0f;
+    const float h10 = u3 - 2.0f * u2 + u;
+    const float h01 = -2.0f * u3 + 3.0f * u2;
+    const float h11 = u3 - u2;
+    return h00 * p0 + h10 * t0 + h01 * p1 + h11 * t1;
+}
 
-    const auto centerIdx = static_cast<std::uint32_t>(mesh.getVertexCount());
-    mesh.addVertex(center, normal);
-    for (const glm::vec3& pt : ring) {
-        mesh.addVertex(pt, normal);
+void sampleSkinningAtAngle(
+    const FuselageSkinning& skin,
+    bool isRightSide,
+    float cosA,
+    float sinA,
+    double& outAngleDeg,
+    double& outStrength
+) noexcept {
+    const float wY = cosA * cosA;
+    const float wZ = sinA * sinA;
+    if (isRightSide) {
+        const double sideA = (cosA >= 0.0f) ? skin.rightRAngleDeg : skin.leftRAngleDeg;
+        const double vertA = (sinA >= 0.0f) ? skin.topRAngleDeg : skin.bottomRAngleDeg;
+        const double sideS = (cosA >= 0.0f) ? skin.rightRStrength : skin.leftRStrength;
+        const double vertS = (sinA >= 0.0f) ? skin.topRStrength : skin.bottomRStrength;
+        outAngleDeg = static_cast<double>(wY) * sideA + static_cast<double>(wZ) * vertA;
+        outStrength = static_cast<double>(wY) * sideS + static_cast<double>(wZ) * vertS;
+    } else {
+        const double sideA = (cosA >= 0.0f) ? skin.rightLAngleDeg : skin.leftLAngleDeg;
+        const double vertA = (sinA >= 0.0f) ? skin.topLAngleDeg : skin.bottomLAngleDeg;
+        const double sideS = (cosA >= 0.0f) ? skin.rightLStrength : skin.leftLStrength;
+        const double vertS = (sinA >= 0.0f) ? skin.topLStrength : skin.bottomLStrength;
+        outAngleDeg = static_cast<double>(wY) * sideA + static_cast<double>(wZ) * vertA;
+        outStrength = static_cast<double>(wY) * sideS + static_cast<double>(wZ) * vertS;
     }
+}
 
-    for (std::size_t i = 0; i < uniqueCount; ++i) {
-        const auto i0 = centerIdx + 1 + static_cast<std::uint32_t>(i);
-        const auto i1 = centerIdx + 1 + static_cast<std::uint32_t>(i + 1);
-        if (!reverseWinding) {
-            mesh.addTriangle(centerIdx, i0, i1);
-        } else {
-            mesh.addTriangle(centerIdx, i1, i0);
-        }
+glm::vec2 resolveRadialOutwardYZ(
+    const FuselageSection& sec,
+    const glm::vec2& ptYZ,
+    const FuselageSection& otherSec,
+    const glm::vec2& otherPtYZ,
+    float cosA,
+    float sinA
+) noexcept {
+    const bool secSlim = sec.getShape() == CrossSectionShape::Point ||
+        sec.width().getFloat() < 1e-4f || sec.height().getFloat() < 1e-4f;
+    const bool otherSlim = otherSec.getShape() == CrossSectionShape::Point ||
+        otherSec.width().getFloat() < 1e-4f || otherSec.height().getFloat() < 1e-4f;
+
+    glm::vec2 d(0.0f);
+    if (!secSlim) {
+        d = glm::vec2(ptYZ.x - sec.yOffset().getFloat(), ptYZ.y - sec.zOffset().getFloat());
+    } else if (!otherSlim) {
+        d = glm::vec2(otherPtYZ.x - otherSec.yOffset().getFloat(), otherPtYZ.y - otherSec.zOffset().getFloat());
+    } else {
+        d = glm::vec2(ptYZ.x - sec.yOffset().getFloat(), ptYZ.y - sec.zOffset().getFloat());
     }
+    const float len = glm::length(d);
+    if (len > 1e-5f) {
+        return d / len;
+    }
+    return glm::vec2(cosA, sinA);
 }
 
 void computeMeshAreaAndVolume(const Mesh& mesh, double& areaOut, double& volumeOut) noexcept {
@@ -177,10 +209,73 @@ void Fuselage::setSmoothLoft(bool smooth) {
     }
 }
 
-bool Fuselage::getCapEnds() const noexcept { return m_capEnds; }
+bool Fuselage::getCapEnds() const noexcept {
+    return m_noseCapType != EndCapType::None || m_tailCapType != EndCapType::None;
+}
+
 void Fuselage::setCapEnds(bool cap) {
-    if (m_capEnds != cap) {
-        m_capEnds = cap;
+    const EndCapType target = cap ? EndCapType::Flat : EndCapType::None;
+    if (cap) {
+        if (m_noseCapType == EndCapType::None && m_tailCapType == EndCapType::None) {
+            m_noseCapType = EndCapType::Flat;
+            m_tailCapType = EndCapType::Flat;
+            markDirty();
+        }
+    } else if (m_noseCapType != EndCapType::None || m_tailCapType != EndCapType::None) {
+        m_noseCapType = target;
+        m_tailCapType = target;
+        markDirty();
+    }
+}
+
+EndCapType Fuselage::getNoseCapType() const noexcept { return m_noseCapType; }
+void Fuselage::setNoseCapType(EndCapType type) {
+    if (m_noseCapType != type) {
+        m_noseCapType = type;
+        markDirty();
+    }
+}
+
+double Fuselage::getNoseCapLength() const noexcept { return m_noseCapLength; }
+void Fuselage::setNoseCapLength(double lengthRatio) {
+    const double c = std::clamp(lengthRatio, 0.05, 8.0);
+    if (std::abs(m_noseCapLength - c) > 1e-6) {
+        m_noseCapLength = c;
+        markDirty();
+    }
+}
+
+double Fuselage::getNoseCapStrength() const noexcept { return m_noseCapStrength; }
+void Fuselage::setNoseCapStrength(double strength) {
+    const double c = std::clamp(strength, 0.1, 2.0);
+    if (std::abs(m_noseCapStrength - c) > 1e-6) {
+        m_noseCapStrength = c;
+        markDirty();
+    }
+}
+
+EndCapType Fuselage::getTailCapType() const noexcept { return m_tailCapType; }
+void Fuselage::setTailCapType(EndCapType type) {
+    if (m_tailCapType != type) {
+        m_tailCapType = type;
+        markDirty();
+    }
+}
+
+double Fuselage::getTailCapLength() const noexcept { return m_tailCapLength; }
+void Fuselage::setTailCapLength(double lengthRatio) {
+    const double c = std::clamp(lengthRatio, 0.05, 8.0);
+    if (std::abs(m_tailCapLength - c) > 1e-6) {
+        m_tailCapLength = c;
+        markDirty();
+    }
+}
+
+double Fuselage::getTailCapStrength() const noexcept { return m_tailCapStrength; }
+void Fuselage::setTailCapStrength(double strength) {
+    const double c = std::clamp(strength, 0.1, 2.0);
+    if (std::abs(m_tailCapStrength - c) > 1e-6) {
+        m_tailCapStrength = c;
         markDirty();
     }
 }
@@ -423,22 +518,68 @@ void Fuselage::rebuildMesh() {
         const int sub = (std::abs(x1 - x0) < 1e-5f) ? 1 : m_axialSubdivisions;
         const int startStep = (s == 0) ? 0 : 1;
 
+        const FuselageSection& sec0 = *ordered[s];
+        const FuselageSection& sec1 = *ordered[s + 1];
+        const bool useSkinnedHermite = m_smoothLoft && (sec0.getSkinning().enabled || sec1.getSkinning().enabled);
+        const float dxBay = std::max(1e-5f, x1 - x0);
+
         for (int step = startStep; step <= sub; ++step) {
             const float t = static_cast<float>(step) / static_cast<float>(sub);
             const float x = x0 + t * (x1 - x0);
             std::vector<glm::vec3> ring(ptCount);
 
             for (std::size_t p = 0; p < ptCount; ++p) {
-                float y = 0.0f;
-                float z = 0.0f;
-                if (m_smoothLoft) {
-                    y = evalHermite(x0, x1, stationLoops[s][p].x, stationLoops[s + 1][p].x, slopesY[p][s], slopesY[p][s + 1], x);
-                    z = evalHermite(x0, x1, stationLoops[s][p].y, stationLoops[s + 1][p].y, slopesZ[p][s], slopesZ[p][s + 1], x);
+                if (useSkinnedHermite) {
+                    const std::size_t pWrap = (p + 1 == ptCount) ? 0 : p;
+                    const float angle = 2.0f * std::numbers::pi_v<float> * static_cast<float>(pWrap) / static_cast<float>(m_radialPoints);
+                    const float cosA = std::cos(angle);
+                    const float sinA = std::sin(angle);
+
+                    const glm::vec3 p0(x0, stationLoops[s][pWrap].x, stationLoops[s][pWrap].y);
+                    const glm::vec3 p1(x1, stationLoops[s + 1][pWrap].x, stationLoops[s + 1][pWrap].y);
+                    const float chordLen = std::max(1e-5f, glm::length(p1 - p0));
+                    const glm::vec2 uRad = resolveRadialOutwardYZ(
+                        sec0,
+                        stationLoops[s][pWrap],
+                        sec1,
+                        stationLoops[s + 1][pWrap],
+                        cosA,
+                        sinA
+                    );
+
+                    auto buildTangent = [&](const FuselageSection& sec, bool rightSide, float pchipSlopeY, float pchipSlopeZ) {
+                        const FuselageSkinning& skin = sec.getSkinning();
+                        if (!skin.enabled) {
+                            return glm::vec3(dxBay, pchipSlopeY * dxBay, pchipSlopeZ * dxBay);
+                        }
+                        double angDeg = 0.0;
+                        double strength = 1.0;
+                        sampleSkinningAtAngle(skin, rightSide, cosA, sinA, angDeg, strength);
+                        const float rad = glm::radians(static_cast<float>(angDeg));
+                        const float len = static_cast<float>(std::clamp(strength, 0.05, 2.5)) * chordLen;
+                        glm::vec3 tang(
+                            len * std::max(0.0f, std::cos(rad)),
+                            len * std::sin(rad) * uRad.x,
+                            len * std::sin(rad) * uRad.y
+                        );
+                        if (tang.x > 2.4f * dxBay) {
+                            tang *= (2.4f * dxBay) / tang.x;
+                        }
+                        return tang;
+                    };
+
+                    const glm::vec3 t0 = buildTangent(sec0, true, slopesY[pWrap][s], slopesZ[pWrap][s]);
+                    const glm::vec3 t1 = buildTangent(sec1, false, slopesY[pWrap][s + 1], slopesZ[pWrap][s + 1]);
+                    ring[p] = evalHermiteVec3(p0, p1, t0, t1, t);
+                } else if (m_smoothLoft) {
+                    const float y = evalHermite(x0, x1, stationLoops[s][p].x, stationLoops[s + 1][p].x, slopesY[p][s], slopesY[p][s + 1], x);
+                    const float z = evalHermite(x0, x1, stationLoops[s][p].y, stationLoops[s + 1][p].y, slopesZ[p][s], slopesZ[p][s + 1], x);
+                    ring[p] = glm::vec3(x, y, z);
                 } else {
-                    y = stationLoops[s][p].x + t * (stationLoops[s + 1][p].x - stationLoops[s][p].x);
-                    z = stationLoops[s][p].y + t * (stationLoops[s + 1][p].y - stationLoops[s][p].y);
+                    const float y = stationLoops[s][p].x + t * (stationLoops[s + 1][p].x - stationLoops[s][p].x);
+                    const float z = stationLoops[s][p].y + t * (stationLoops[s + 1][p].y - stationLoops[s][p].y);
+                    ring[p] = glm::vec3(x, y, z);
                 }
-                ring[p] = glm::vec3(x, y, z);
             }
             loftRings.push_back(std::move(ring));
         }
@@ -461,9 +602,9 @@ void Fuselage::rebuildMesh() {
             const glm::vec3 n1 = glm::cross(v01 - v00, v10 - v00);
             const glm::vec3 n2 = glm::cross(v01 - v10, v11 - v10);
 
-            normals[idxAt(r, p)] += n1;
+            normals[idxAt(r, p)] += n1 + n2;
             normals[idxAt(r + 1, p)] += n1 + n2;
-            normals[idxAt(r + 1, p + 1)] += n2;
+            normals[idxAt(r + 1, p + 1)] += n1 + n2;
             normals[idxAt(r, p + 1)] += n1 + n2;
         }
     }
@@ -497,9 +638,29 @@ void Fuselage::rebuildMesh() {
         }
     }
 
-    if (m_capEnds) {
-        appendCapFan(m_mesh, loftRings.front(), glm::vec3(-1.0f, 0.0f, 0.0f), true);
-        appendCapFan(m_mesh, loftRings.back(), glm::vec3(1.0f, 0.0f, 0.0f), false);
+    if (ordered.front()->getShape() != CrossSectionShape::Point && m_noseCapType != EndCapType::None) {
+        MeshPrimitives::appendEndCap(
+            m_mesh,
+            loftRings.front(),
+            glm::vec3(-1.0f, 0.0f, 0.0f),
+            m_noseCapType,
+            m_noseCapLength,
+            m_noseCapStrength,
+            true,
+            true
+        );
+    }
+    if (ordered.back()->getShape() != CrossSectionShape::Point && m_tailCapType != EndCapType::None) {
+        MeshPrimitives::appendEndCap(
+            m_mesh,
+            loftRings.back(),
+            glm::vec3(1.0f, 0.0f, 0.0f),
+            m_tailCapType,
+            m_tailCapLength,
+            m_tailCapStrength,
+            true,
+            false
+        );
     }
 
     computeMeshAreaAndVolume(m_mesh, m_wettedArea, m_volume);

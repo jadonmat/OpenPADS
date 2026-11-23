@@ -6,6 +6,8 @@
 #include <glad/gl.h>
 #include <glm/gtc/matrix_inverse.hpp>
 
+#include "core/Wing.hpp"
+
 namespace opads {
 
 namespace {
@@ -260,6 +262,31 @@ void Viewport3D::render(Aircraft& aircraft) {
 
         if (isSelected) {
             renderHighlightLoops(*component, viewProj);
+        } else if (const auto* wingComp = dynamic_cast<const Wing*>(component.get())) {
+            const auto& csOutlines = wingComp->getControlSurfaceOutlines();
+            if (!csOutlines.empty() && m_highlightVao != 0 && m_highlightVbo != 0) {
+                m_highlightShader.bind();
+                m_highlightShader.setMat4("uViewProj", viewProj);
+                m_highlightShader.setMat4("uModel", component->getTransform().getMatrix());
+                m_highlightShader.setVec3("uColor", glm::vec3(0.18f, 0.72f, 0.88f));
+                glLineWidth(2.0f);
+                glBindVertexArray(m_highlightVao);
+                glBindBuffer(GL_ARRAY_BUFFER, m_highlightVbo);
+                for (const auto& loop : csOutlines) {
+                    if (loop.size() < 2) {
+                        continue;
+                    }
+                    glBufferData(
+                        GL_ARRAY_BUFFER,
+                        static_cast<GLsizeiptr>(loop.size() * sizeof(glm::vec3)),
+                        loop.data(),
+                        GL_DYNAMIC_DRAW
+                    );
+                    glDrawArrays(GL_LINE_STRIP, 0, static_cast<GLsizei>(loop.size()));
+                }
+                glBindVertexArray(0);
+                glLineWidth(1.0f);
+            }
         }
     }
 

@@ -9,6 +9,7 @@
 
 #include "core/Component.hpp"
 #include "core/FuselageSection.hpp"
+#include "core/MeshPrimitives.hpp"
 #include "core/Parameter.hpp"
 
 namespace opads {
@@ -30,6 +31,20 @@ public:
 
     bool getCapEnds() const noexcept;
     void setCapEnds(bool cap);
+
+    EndCapType getNoseCapType() const noexcept;
+    void setNoseCapType(EndCapType type);
+    double getNoseCapLength() const noexcept;
+    void setNoseCapLength(double lengthRatio);
+    double getNoseCapStrength() const noexcept;
+    void setNoseCapStrength(double strength);
+
+    EndCapType getTailCapType() const noexcept;
+    void setTailCapType(EndCapType type);
+    double getTailCapLength() const noexcept;
+    void setTailCapLength(double lengthRatio);
+    double getTailCapStrength() const noexcept;
+    void setTailCapStrength(double strength);
 
     int getRadialPoints() const noexcept;
     void setRadialPoints(int count);
@@ -70,9 +85,14 @@ protected:
 private:
     Parameter m_length;
     bool m_smoothLoft{true};
-    bool m_capEnds{true};
+    EndCapType m_noseCapType{EndCapType::Flat};
+    EndCapType m_tailCapType{EndCapType::Flat};
+    double m_noseCapLength{1.0};
+    double m_noseCapStrength{0.5};
+    double m_tailCapLength{1.0};
+    double m_tailCapStrength{0.5};
     int m_radialPoints{36};
-    int m_axialSubdivisions{8};
+    int m_axialSubdivisions{12};
     std::size_t m_selectedSection{1};
 
     std::vector<FuselageSection> m_sections;

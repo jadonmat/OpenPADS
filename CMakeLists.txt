@@ -64,7 +64,14 @@ FetchContent_Declare(
     GIT_SHALLOW    TRUE
 )
 
-FetchContent_MakeAvailable(glfw glm glad imgui implot nlohmann_json)
+FetchContent_Declare(
+    pugixml
+    GIT_REPOSITORY https://github.com/zeux/pugixml.git
+    GIT_TAG        v1.14
+    GIT_SHALLOW    TRUE
+)
+
+FetchContent_MakeAvailable(glfw glm glad imgui implot nlohmann_json pugixml)
 
 glad_add_library(glad_gl_core_45 STATIC API gl:core=4.5)
 
@@ -96,10 +103,14 @@ add_library(OpenPADS_Core STATIC
     src/core/Parameter.cpp
     src/core/Mesh.hpp
     src/core/Mesh.cpp
+    src/core/MeshPrimitives.hpp
+    src/core/MeshPrimitives.cpp
     src/core/Airfoil.hpp
     src/core/Airfoil.cpp
     src/core/Component.hpp
     src/core/Component.cpp
+    src/core/ControlSurface.hpp
+    src/core/ControlSurface.cpp
     src/core/WingSection.hpp
     src/core/WingSection.cpp
     src/core/Wing.hpp
@@ -108,6 +119,18 @@ add_library(OpenPADS_Core STATIC
     src/core/FuselageSection.cpp
     src/core/Fuselage.hpp
     src/core/Fuselage.cpp
+    src/core/Pod.hpp
+    src/core/Pod.cpp
+    src/core/Propeller.hpp
+    src/core/Propeller.cpp
+    src/core/LandingGear.hpp
+    src/core/LandingGear.cpp
+    src/core/ImportedMesh.hpp
+    src/core/ImportedMesh.cpp
+    src/core/MeshImporter.hpp
+    src/core/MeshImporter.cpp
+    src/core/OpenVspImporter.hpp
+    src/core/OpenVspImporter.cpp
     src/core/ProjectSerializer.hpp
     src/core/ProjectSerializer.cpp
     src/core/MeshExporter.hpp
@@ -118,7 +141,7 @@ add_library(OpenPADS_Core STATIC
     src/core/Aircraft.cpp
 )
 target_include_directories(OpenPADS_Core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(OpenPADS_Core PUBLIC glm::glm nlohmann_json::nlohmann_json)
+target_link_libraries(OpenPADS_Core PUBLIC glm::glm nlohmann_json::nlohmann_json pugixml::pugixml)
 target_compile_definitions(OpenPADS_Core PUBLIC OPENPADS_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
 
 # ------------------------------------------------------------------------------

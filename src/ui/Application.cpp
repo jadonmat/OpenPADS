@@ -11,6 +11,8 @@
 #include <implot.h>
 
 #include "core/MeshExporter.hpp"
+#include "core/MeshImporter.hpp"
+#include "core/OpenVspImporter.hpp"
 #include "core/ProjectSerializer.hpp"
 #include "ui/AirfoilEditorPanel.hpp"
 #include "ui/FileDialog.hpp"
@@ -210,6 +212,15 @@ void Application::renderMenuBar() {
             actionSaveProject(true);
         }
         ImGui::Separator();
+        if (ImGui::BeginMenu("Import")) {
+            if (ImGui::MenuItem("OpenVSP (.vsp3)...")) {
+                actionImportOpenVsp();
+            }
+            if (ImGui::MenuItem("Mesh (.stl, .obj)...")) {
+                actionImportMesh();
+            }
+            ImGui::EndMenu();
+        }
         if (ImGui::BeginMenu("Export")) {
             if (ImGui::MenuItem("Binary STL (.stl)...")) {
                 actionExportStl();
@@ -362,6 +373,36 @@ void Application::actionExportStl() {
     if (path.has_value()) {
         m_aircraft.rebuildDirty();
         MeshExporter::exportBinaryStl(m_aircraft, *path);
+    }
+}
+
+void Application::actionImportOpenVsp() {
+    const auto path = FileDialog::openFile(
+        m_window,
+        "OpenVSP Geometry (*.vsp3)\0*.vsp3\0All Files (*.*)\0*.*\0",
+        "Import OpenVSP .vsp3 Model"
+    );
+    if (!path.has_value()) {
+        return;
+    }
+    const std::string before = ProjectSerializer::saveToString(m_aircraft);
+    if (OpenVspImporter::importFromFile(m_aircraft, *path)) {
+        m_undoStack.pushSnapshot(before, m_aircraft, "Import OpenVSP");
+    }
+}
+
+void Application::actionImportMesh() {
+    const auto path = FileDialog::openFile(
+        m_window,
+        "3D Mesh (*.stl;*.obj)\0*.stl;*.obj\0All Files (*.*)\0*.*\0",
+        "Import STL / OBJ Mesh"
+    );
+    if (!path.has_value()) {
+        return;
+    }
+    const std::string before = ProjectSerializer::saveToString(m_aircraft);
+    if (MeshImporter::importAuto(m_aircraft, *path)) {
+        m_undoStack.pushSnapshot(before, m_aircraft, "Import Mesh");
     }
 }
 

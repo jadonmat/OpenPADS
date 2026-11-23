@@ -12,9 +12,15 @@
 #include "core/Airfoil.hpp"
 #include "core/Component.hpp"
 #include "core/Fuselage.hpp"
+#include "core/ImportedMesh.hpp"
+#include "core/LandingGear.hpp"
 #include "core/MeshExporter.hpp"
+#include "core/MeshImporter.hpp"
+#include "core/OpenVspImporter.hpp"
 #include "core/Parameter.hpp"
+#include "core/Pod.hpp"
 #include "core/ProjectSerializer.hpp"
+#include "core/Propeller.hpp"
 #include "core/Transform.hpp"
 #include "core/UndoStack.hpp"
 #include "core/Wing.hpp"
@@ -403,4 +409,128 @@ TEST_CASE("GeometrySnap snaps moving wing flush to fuselage surface and UndoStac
 
     REQUIRE(undo.redo(aircraft));
     REQUIRE(aircraft.findComponent(wingId)->getTransform().getPosition().y == Catch::Approx(snap.snappedPosition.y).margin(1e-4f));
+}
+
+TEST_CASE("Phase 2 components build valid meshes and support ControlSurfaces", "[core][phase2]") {
+    opads::Wing wing(1, "Flapped Wing");
+    wing.addControlSurface(opads::ControlSurface("Aileron", 0, 0.55, 0.90, 0.25, 18.0, false));
+    wing.addControlSurface(opads::ControlSurface("Flap", 0, 0.10, 0.45, 0.28, 25.0, true));
+    wing.ensureBuilt();
+    REQUIRE(wing.getControlSurfaceCount() == 2);
+    REQUIRE_FALSE(wing.getMesh().isEmpty());
+    // 1 selected XSec * 2 (XZ) + 2 control surfaces * 2 (XZ) = 6 highlight loops
+    REQUIRE(wing.getHighlightLoops().size() == 6);
+
+    opads::Pod pod(2, "Turbine Pod");
+    pod.setSymmetry(opads::SymmetryMode::XZ);
+    pod.ensureBuilt();
+    REQUIRE(pod.getWettedArea() > 1.0);
+    REQUIRE(pod.getVolume() > 0.2);
+    for (const auto& v : pod.getMesh().getVertices()) {
+        REQUIRE(glm::length(v.normal) == Catch::Approx(1.0f).margin(1e-3f));
+    }
+
+    opads::Propeller prop(3, "3-Blade Prop");
+    prop.setBladeCount(4);
+    prop.ensureBuilt();
+    REQUIRE(prop.getBladeCount() == 4);
+    REQUIRE(prop.getDiskArea() == Catch::Approx(3.14159 * 1.05 * 1.05).margin(1e-2));
+    REQUIRE(prop.getSolidity() > 0.05);
+    REQUIRE_FALSE(prop.getMesh().isEmpty());
+
+    opads::LandingGear gear(4, "Main Gear");
+    gear.setWheelsPerStrut(2);
+    gear.setWheelPant(true);
+    gear.ensureBuilt();
+    REQUIRE(gear.getFrontalArea() > 0.1);
+    REQUIRE(gear.getWettedArea() > 1.0);
+    REQUIRE_FALSE(gear.getMesh().isEmpty());
+}
+
+TEST_CASE("OpenVspImporter parses .vsp3 XML and MeshImporter converts STL/OBJ with unit scaling", "[core][import]") {
+    constexpr const char* kSampleVsp3 = R"(
+<Vsp_Geometry>
+  <Vehicle>
+    <Geom>
+      <ParmContainer>
+        <Name Value="MainWing"/>
+        <XForm>
+          <X_Location Value="3.5"/>
+          <Y_Location Value="0.0"/>
+          <Z_Location Value="0.4"/>
+        </XForm>
+        <Sym>
+          <Sym_Planar_Flag Value="2"/>
+        </Sym>
+      </ParmContainer>
+      <GeomBase><TypeName>Wing</TypeName></GeomBase>
+      <WingGeom>
+        <XSecSurf>
+          <XSec>
+            <XSecCurve><ParmContainer><ThickChord Value="0.12"/><Camber Value="0.02"/><CamberLoc Value="0.4"/></ParmContainer></XSecCurve>
+          </XSec>
+          <XSec>
+            <ParmContainer><Span Value="6.5"/><Root_Chord Value="2.0"/><Tip_Chord Value="1.0"/><Sweep Value="14.0"/><Dihedral Value="5.0"/></ParmContainer>
+            <XSecCurve><ParmContainer><ThickChord Value="0.10"/><Camber Value="0.02"/><CamberLoc Value="0.4"/></ParmContainer></XSecCurve>
+          </XSec>
+        </XSecSurf>
+      </WingGeom>
+    </Geom>
+    <Geom>
+      <ParmContainer>
+        <Name Value="Fuse"/>
+        <Design><Length Value="11.0"/></Design>
+      </ParmContainer>
+      <GeomBase><TypeName>Fuselage</TypeName></GeomBase>
+      <FuselageGeom>
+        <XSecSurf>
+          <XSec><ParmContainer><XLocPercent Value="0.0"/></ParmContainer><XSecCurve Type="0"/></XSec>
+          <XSec><ParmContainer><XLocPercent Value="0.5"/></ParmContainer><XSecCurve Type="2"><ParmContainer><Width Value="1.6"/><Height Value="1.8"/></ParmContainer></XSecCurve></XSec>
+          <XSec><ParmContainer><XLocPercent Value="1.0"/></ParmContainer><XSecCurve Type="0"/></XSec>
+        </XSecSurf>
+      </FuselageGeom>
+    </Geom>
+  </Vehicle>
+</Vsp_Geometry>
+)";
+
+    opads::Aircraft vspAircraft;
+    REQUIRE(opads::OpenVspImporter::importFromString(vspAircraft, kSampleVsp3, "VspTest"));
+    REQUIRE(vspAircraft.getComponents().size() == 2);
+
+    const auto* vspWing = dynamic_cast<const opads::Wing*>(vspAircraft.getComponents()[0].get());
+    REQUIRE(vspWing != nullptr);
+    REQUIRE(vspWing->getTransform().getPosition().x == Catch::Approx(3.5f));
+    REQUIRE(vspWing->getSection(0).span().getValue() == Catch::Approx(6.5));
+    REQUIRE(vspWing->getSection(0).getRootAirfoil().getName() == "NACA 2412");
+
+    // Export STL & OBJ, re-import with MeshImporter + mm->m scaling + duplicate + JSON round-trip
+    const std::filesystem::path tmpStl = std::filesystem::temp_directory_path() / "openpads_phase2_import.stl";
+    const std::filesystem::path tmpObj = std::filesystem::temp_directory_path() / "openpads_phase2_import.obj";
+    REQUIRE(opads::MeshExporter::exportBinaryStl(vspAircraft, tmpStl));
+    REQUIRE(opads::MeshExporter::exportObj(vspAircraft, tmpObj));
+
+    opads::Aircraft meshAircraft("Imported Test");
+    REQUIRE(opads::MeshImporter::importAuto(meshAircraft, tmpStl, 0.001f, opads::UpAxisConversion::YUpToZUp));
+    REQUIRE(opads::MeshImporter::importAuto(meshAircraft, tmpObj, 1.0f, opads::UpAxisConversion::NoneZUp));
+    REQUIRE(meshAircraft.getComponents().size() >= 2);
+
+    auto* impMesh = dynamic_cast<opads::ImportedMesh*>(meshAircraft.getComponents().front().get());
+    REQUIRE(impMesh != nullptr);
+    REQUIRE(impMesh->getUnitScale() == Catch::Approx(0.001f));
+    REQUIRE(impMesh->getAxisConversion() == opads::UpAxisConversion::YUpToZUp);
+
+    // Duplicate & ProjectSerializer round-trip across all component types
+    REQUIRE(opads::ProjectSerializer::duplicateComponent(vspAircraft, vspWing->getId()) != nullptr);
+    vspAircraft.addComponent(std::make_unique<opads::Pod>(vspAircraft.allocateComponentId(), "Pod1"));
+    vspAircraft.addComponent(std::make_unique<opads::Propeller>(vspAircraft.allocateComponentId(), "Prop1"));
+    vspAircraft.addComponent(std::make_unique<opads::LandingGear>(vspAircraft.allocateComponentId(), "Gear1"));
+
+    const std::string saved = opads::ProjectSerializer::saveToString(vspAircraft);
+    opads::Aircraft reloaded;
+    REQUIRE(opads::ProjectSerializer::loadFromString(reloaded, saved));
+    REQUIRE(reloaded.getComponents().size() == 6);
+
+    std::filesystem::remove(tmpStl);
+    std::filesystem::remove(tmpObj);
 }

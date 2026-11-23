@@ -16,6 +16,8 @@ public:
 
     static bool saveToFile(const Aircraft& aircraft, const std::filesystem::path& path);
     static bool loadFromFile(Aircraft& aircraft, const std::filesystem::path& path);
+
+    static Component* duplicateComponent(Aircraft& aircraft, std::uint64_t sourceId);
 };
 
 } // namespace opads

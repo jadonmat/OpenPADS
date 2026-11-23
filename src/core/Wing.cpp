@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numbers>
 #include <utility>
 
 #include <glm/geometric.hpp>
@@ -108,7 +109,8 @@ void appendWingHalf(
     Mesh& mesh,
     const std::vector<std::vector<glm::vec3>>& rings,
     bool capRoot,
-    bool capTip
+    bool capTip,
+    bool mirrorY
 ) {
     if (rings.size() < 2) {
         return;
@@ -119,6 +121,15 @@ void appendWingHalf(
         return;
     }
 
+    std::vector<std::vector<glm::vec3>> workRings = rings;
+    if (mirrorY) {
+        for (auto& ring : workRings) {
+            for (glm::vec3& pt : ring) {
+                pt.y = -pt.y;
+            }
+        }
+    }
+
     std::vector<glm::vec3> normals(ringCount * ptCount, glm::vec3(0.0f));
     const auto idxAt = [ptCount](std::size_t r, std::size_t p) {
         return r * ptCount + p;
@@ -127,13 +138,17 @@ void appendWingHalf(
     // Accumulate area-weighted face normals across skin quads.
     for (std::size_t r = 0; r + 1 < ringCount; ++r) {
         for (std::size_t p = 0; p + 1 < ptCount; ++p) {
-            const glm::vec3& v00 = rings[r][p];
-            const glm::vec3& v10 = rings[r + 1][p];
-            const glm::vec3& v11 = rings[r + 1][p + 1];
-            const glm::vec3& v01 = rings[r][p + 1];
+            const glm::vec3& v00 = workRings[r][p];
+            const glm::vec3& v10 = workRings[r + 1][p];
+            const glm::vec3& v11 = workRings[r + 1][p + 1];
+            const glm::vec3& v01 = workRings[r][p + 1];
 
-            const glm::vec3 n1 = glm::cross(v10 - v00, v11 - v00);
-            const glm::vec3 n2 = glm::cross(v11 - v00, v01 - v00);
+            glm::vec3 n1 = glm::cross(v10 - v00, v11 - v00);
+            glm::vec3 n2 = glm::cross(v11 - v00, v01 - v00);
+            if (mirrorY) {
+                n1 = -n1;
+                n2 = -n2;
+            }
 
             normals[idxAt(r, p)] += n1 + n2;
             normals[idxAt(r + 1, p)] += n1;
@@ -148,7 +163,7 @@ void appendWingHalf(
             glm::vec3 n = normals[idxAt(r, p)];
             const float len = glm::length(n);
             n = (len > 1e-7f) ? (n / len) : glm::vec3(0.0f, 0.0f, 1.0f);
-            mesh.addVertex(rings[r][p], n);
+            mesh.addVertex(workRings[r][p], n);
         }
     }
 
@@ -159,24 +174,86 @@ void appendWingHalf(
             const auto i11 = base + static_cast<std::uint32_t>(idxAt(r + 1, p + 1));
             const auto i01 = base + static_cast<std::uint32_t>(idxAt(r, p + 1));
 
-            mesh.addTriangle(i00, i10, i11);
-            mesh.addTriangle(i00, i11, i01);
+            if (!mirrorY) {
+                mesh.addTriangle(i00, i10, i11);
+                mesh.addTriangle(i00, i11, i01);
+            } else {
+                mesh.addTriangle(i00, i11, i10);
+                mesh.addTriangle(i00, i01, i11);
+            }
         }
     }
 
     if (capRoot) {
-        glm::vec3 spanDir = rings[1][0] - rings[0][0];
+        glm::vec3 spanDir = workRings[1][0] - workRings[0][0];
         const float len = glm::length(spanDir);
-        const glm::vec3 rootNormal = (len > 1e-6f) ? -(spanDir / len) : glm::vec3(0.0f, -1.0f, 0.0f);
-        appendAirfoilCap(mesh, rings.front(), rootNormal, true);
+        const glm::vec3 rootNormal = (len > 1e-6f) ? -(spanDir / len) : glm::vec3(0.0f, mirrorY ? 1.0f : -1.0f, 0.0f);
+        appendAirfoilCap(mesh, workRings.front(), rootNormal, !mirrorY);
     }
 
     if (capTip) {
-        glm::vec3 spanDir = rings[ringCount - 1][0] - rings[ringCount - 2][0];
+        glm::vec3 spanDir = workRings[ringCount - 1][0] - workRings[ringCount - 2][0];
         const float len = glm::length(spanDir);
-        const glm::vec3 tipNormal = (len > 1e-6f) ? (spanDir / len) : glm::vec3(0.0f, 1.0f, 0.0f);
-        appendAirfoilCap(mesh, rings.back(), tipNormal, false);
+        const glm::vec3 tipNormal = (len > 1e-6f) ? (spanDir / len) : glm::vec3(0.0f, mirrorY ? -1.0f : 1.0f, 0.0f);
+        appendAirfoilCap(mesh, workRings.back(), tipNormal, mirrorY);
     }
+}
+
+glm::vec3 rotateAroundAxis(
+    const glm::vec3& point,
+    const glm::vec3& axisOrigin,
+    const glm::vec3& axisUnit,
+    float angleRad
+) noexcept {
+    const glm::vec3 r = point - axisOrigin;
+    const float cosA = std::cos(angleRad);
+    const float sinA = std::sin(angleRad);
+    const glm::vec3 rotated = r * cosA + glm::cross(axisUnit, r) * sinA + axisUnit * glm::dot(axisUnit, r) * (1.0f - cosA);
+    return axisOrigin + rotated;
+}
+
+std::vector<glm::vec3> sampleControlSurfaceOutline(
+    const std::vector<glm::vec3>& rootRing,
+    const std::vector<glm::vec3>& tipRing,
+    float uStart,
+    float uEnd,
+    float chordFrac,
+    int chordPtsPerSurface,
+    float deflectionDeg
+) {
+    const std::size_t n = std::min(rootRing.size(), tipRing.size());
+    if (n < 3) {
+        return {};
+    }
+
+    auto evalRing = [&](float u) {
+        return interpolateRings(rootRing, tipRing, u);
+    };
+    const std::vector<glm::vec3> rStart = evalRing(uStart);
+    const std::vector<glm::vec3> rEnd = evalRing(uEnd);
+
+    const float hingeFrac = 1.0f - chordFrac;
+    const std::size_t half = n / 2;
+    std::size_t hingeUpperIdx = 0;
+    for (std::size_t i = 0; i <= half; ++i) {
+        const double beta = std::numbers::pi * static_cast<double>(half - i) / static_cast<double>(chordPtsPerSurface - 1);
+        const float xFrac = static_cast<float>(0.5 * (1.0 - std::cos(beta)));
+        if (xFrac >= hingeFrac) {
+            hingeUpperIdx = i;
+        }
+    }
+
+    const glm::vec3 hStart = rStart[hingeUpperIdx];
+    const glm::vec3 hEnd = rEnd[hingeUpperIdx];
+    const glm::vec3 hVec = hEnd - hStart;
+    const float hLen = glm::length(hVec);
+    const glm::vec3 hUnit = (hLen > 1e-6f) ? (hVec / hLen) : glm::vec3(0.0f, 1.0f, 0.0f);
+    const float rad = glm::radians(deflectionDeg);
+
+    const glm::vec3 teStart = rotateAroundAxis(rStart.front(), hStart, hUnit, rad);
+    const glm::vec3 teEnd = rotateAroundAxis(rEnd.front(), hEnd, hUnit, rad);
+
+    return {hStart, hEnd, teEnd, teStart, hStart};
 }
 
 double computeMeshSurfaceArea(const Mesh& mesh) noexcept {
@@ -218,6 +295,9 @@ std::vector<std::vector<glm::vec3>> Wing::getHighlightLoops() const {
             pt.y = -pt.y;
         }
         result.push_back(std::move(mirrored));
+    }
+    for (const auto& outline : m_controlSurfaceOutlines) {
+        result.push_back(outline);
     }
     return result;
 }
@@ -332,6 +412,36 @@ bool Wing::removeSection(std::size_t index) {
         syncSectionsFromBay(index - 1);
     }
     m_selectedCrossSection = std::min(m_selectedCrossSection, m_sections.size());
+    markDirty();
+    return true;
+}
+
+std::size_t Wing::getControlSurfaceCount() const noexcept {
+    return m_controlSurfaces.size();
+}
+
+ControlSurface& Wing::getControlSurface(std::size_t index) {
+    return m_controlSurfaces.at(index);
+}
+
+const ControlSurface& Wing::getControlSurface(std::size_t index) const {
+    return m_controlSurfaces.at(index);
+}
+
+const std::vector<ControlSurface>& Wing::getControlSurfaces() const noexcept {
+    return m_controlSurfaces;
+}
+
+void Wing::addControlSurface(ControlSurface surface) {
+    m_controlSurfaces.push_back(std::move(surface));
+    markDirty();
+}
+
+bool Wing::removeControlSurface(std::size_t index) {
+    if (index >= m_controlSurfaces.size()) {
+        return false;
+    }
+    m_controlSurfaces.erase(m_controlSurfaces.begin() + static_cast<std::ptrdiff_t>(index));
     markDirty();
     return true;
 }
@@ -520,6 +630,7 @@ double Wing::getWettedArea() const noexcept {
 
 void Wing::rebuildMesh() {
     m_crossSectionRings.clear();
+    m_controlSurfaceOutlines.clear();
     m_wettedArea = 0.0;
 
     if (m_sections.empty()) {
@@ -531,70 +642,161 @@ void Wing::rebuildMesh() {
         bay.getTipAirfoil().setPointsPerSurface(m_chordPoints);
     }
 
-    std::vector<std::vector<glm::vec3>> loftRings;
-    glm::vec3 currentLE(0.0f, 0.0f, 0.0f);
+    const auto buildHalfRings = [&](float deflSign) {
+        std::vector<std::vector<glm::vec3>> loftRings;
+        glm::vec3 currentLE(0.0f, 0.0f, 0.0f);
 
-    for (std::size_t b = 0; b < m_sections.size(); ++b) {
-        const WingSection& bay = m_sections[b];
-        const glm::vec3 tipLE = bay.computeTipLeadingEdge(currentLE);
+        for (std::size_t b = 0; b < m_sections.size(); ++b) {
+            const WingSection& bay = m_sections[b];
+            const glm::vec3 tipLE = bay.computeTipLeadingEdge(currentLE);
 
-        const std::vector<glm::vec3> rootRing = buildCrossSectionRing3D(
-            bay.getRootAirfoil(),
-            currentLE,
-            bay.rootChord().getFloat(),
-            bay.rootTwistDeg().getFloat(),
-            bay.twistLocation().getFloat(),
-            bay.dihedralDeg().getFloat()
-        );
-        const std::vector<glm::vec3> tipRing = buildCrossSectionRing3D(
-            bay.getTipAirfoil(),
-            tipLE,
-            bay.tipChord().getFloat(),
-            bay.tipTwistDeg().getFloat(),
-            bay.twistLocation().getFloat(),
-            bay.dihedralDeg().getFloat()
-        );
+            const std::vector<glm::vec3> rootRing = buildCrossSectionRing3D(
+                bay.getRootAirfoil(),
+                currentLE,
+                bay.rootChord().getFloat(),
+                bay.rootTwistDeg().getFloat(),
+                bay.twistLocation().getFloat(),
+                bay.dihedralDeg().getFloat()
+            );
+            const std::vector<glm::vec3> tipRing = buildCrossSectionRing3D(
+                bay.getTipAirfoil(),
+                tipLE,
+                bay.tipChord().getFloat(),
+                bay.tipTwistDeg().getFloat(),
+                bay.twistLocation().getFloat(),
+                bay.dihedralDeg().getFloat()
+            );
 
-        if (b == 0) {
-            m_crossSectionRings.push_back(rootRing);
-            loftRings.push_back(rootRing);
+            if (deflSign > 0.0f && b == 0) {
+                m_crossSectionRings.push_back(rootRing);
+            }
+            if (deflSign > 0.0f) {
+                m_crossSectionRings.push_back(tipRing);
+            }
+
+            // Collect spanwise break points (including control surface boundaries)
+            const int sub = bay.getSpanSubdivisions();
+            std::vector<float> uBreaks;
+            uBreaks.reserve(static_cast<std::size_t>(sub) + 1 + m_controlSurfaces.size() * 2);
+            for (int s = 0; s <= sub; ++s) {
+                uBreaks.push_back(static_cast<float>(s) / static_cast<float>(sub));
+            }
+            for (const ControlSurface& cs : m_controlSurfaces) {
+                if (cs.getBayIndex() == b) {
+                    const float u0 = cs.spanStartFrac().getFloat();
+                    const float u1 = cs.spanEndFrac().getFloat();
+                    if (u1 > u0 + 1e-3f) {
+                        uBreaks.push_back(u0);
+                        uBreaks.push_back(u1);
+                    }
+                }
+            }
+            std::sort(uBreaks.begin(), uBreaks.end());
+            uBreaks.erase(std::unique(uBreaks.begin(), uBreaks.end(), [](float a, float bVal) {
+                return std::abs(a - bVal) < 1e-4f;
+            }), uBreaks.end());
+
+            const std::size_t startIdx = (b == 0) ? 0 : 1;
+            for (std::size_t k = startIdx; k < uBreaks.size(); ++k) {
+                const float u = uBreaks[k];
+                std::vector<glm::vec3> ring = interpolateRings(rootRing, tipRing, u);
+
+                // Deflect trailing-edge points covered by any active control surface
+                for (const ControlSurface& cs : m_controlSurfaces) {
+                    if (cs.getBayIndex() != b) {
+                        continue;
+                    }
+                    const float u0 = cs.spanStartFrac().getFloat();
+                    const float u1 = cs.spanEndFrac().getFloat();
+                    if (u < u0 - 1e-4f || u > u1 + 1e-4f || u1 <= u0 + 1e-3f) {
+                        continue;
+                    }
+                    const float signedDeflDeg = cs.deflectionDeg().getFloat() * (cs.isSymmetric() ? 1.0f : deflSign);
+                    if (std::abs(signedDeflDeg) < 1e-3f) {
+                        continue;
+                    }
+
+                    const float hingeFrac = 1.0f - cs.chordFrac().getFloat();
+                    const std::size_t ptCount = ring.size();
+                    const std::size_t half = ptCount / 2;
+
+                    // Locate upper and lower hinge indices on cosine-spaced airfoil loop
+                    std::size_t upperHingeIdx = 0;
+                    for (std::size_t p = 0; p <= half; ++p) {
+                        const double beta = std::numbers::pi * static_cast<double>(half - p) / static_cast<double>(m_chordPoints - 1);
+                        const float xFrac = static_cast<float>(0.5 * (1.0 - std::cos(beta)));
+                        if (xFrac >= hingeFrac) {
+                            upperHingeIdx = p;
+                        }
+                    }
+                    const std::size_t lowerHingeIdx = ptCount - 1 - upperHingeIdx;
+
+                    // Compute world hinge line across the bay
+                    const glm::vec3 hingeRoot = rootRing[upperHingeIdx];
+                    const glm::vec3 hingeTip = tipRing[upperHingeIdx];
+                    const glm::vec3 hingeDir = hingeTip - hingeRoot;
+                    const float hLen = glm::length(hingeDir);
+                    const glm::vec3 hingeUnit = (hLen > 1e-6f) ? (hingeDir / hLen) : glm::vec3(0.0f, 1.0f, 0.0f);
+                    const glm::vec3 hingeLocal = 0.5f * (ring[upperHingeIdx] + ring[lowerHingeIdx]);
+                    const float rad = glm::radians(signedDeflDeg);
+
+                    for (std::size_t p = 0; p <= upperHingeIdx; ++p) {
+                        ring[p] = rotateAroundAxis(ring[p], hingeLocal, hingeUnit, rad);
+                    }
+                    for (std::size_t p = lowerHingeIdx; p < ptCount; ++p) {
+                        ring[p] = rotateAroundAxis(ring[p], hingeLocal, hingeUnit, rad);
+                    }
+                }
+
+                loftRings.push_back(std::move(ring));
+            }
+
+            if (deflSign > 0.0f) {
+                for (const ControlSurface& cs : m_controlSurfaces) {
+                    if (cs.getBayIndex() == b) {
+                        auto outline = sampleControlSurfaceOutline(
+                            rootRing,
+                            tipRing,
+                            cs.spanStartFrac().getFloat(),
+                            cs.spanEndFrac().getFloat(),
+                            cs.chordFrac().getFloat(),
+                            m_chordPoints,
+                            cs.deflectionDeg().getFloat()
+                        );
+                        if (!outline.empty()) {
+                            m_controlSurfaceOutlines.push_back(outline);
+                            if (m_symmetry == SymmetryMode::XZ) {
+                                auto mirrorOutline = sampleControlSurfaceOutline(
+                                    rootRing,
+                                    tipRing,
+                                    cs.spanStartFrac().getFloat(),
+                                    cs.spanEndFrac().getFloat(),
+                                    cs.chordFrac().getFloat(),
+                                    m_chordPoints,
+                                    cs.deflectionDeg().getFloat() * (cs.isSymmetric() ? 1.0f : -1.0f)
+                                );
+                                for (glm::vec3& pt : mirrorOutline) {
+                                    pt.y = -pt.y;
+                                }
+                                m_controlSurfaceOutlines.push_back(std::move(mirrorOutline));
+                            }
+                        }
+                    }
+                }
+            }
+
+            currentLE = tipLE;
         }
-
-        const int sub = bay.getSpanSubdivisions();
-        for (int s = 1; s < sub; ++s) {
-            const float t = static_cast<float>(s) / static_cast<float>(sub);
-            loftRings.push_back(interpolateRings(rootRing, tipRing, t));
-        }
-
-        m_crossSectionRings.push_back(tipRing);
-        loftRings.push_back(tipRing);
-
-        currentLE = tipLE;
-    }
+        return loftRings;
+    };
 
     const bool capRoot = m_capTips && (m_symmetry == SymmetryMode::None);
-    appendWingHalf(m_mesh, loftRings, capRoot, m_capTips);
+    const std::vector<std::vector<glm::vec3>> rightRings = buildHalfRings(1.0f);
+    appendWingHalf(m_mesh, rightRings, capRoot, m_capTips, false);
 
     if (m_symmetry == SymmetryMode::XZ) {
-        const std::size_t halfVertCount = m_mesh.getVertexCount();
-        const std::size_t halfIdxCount = m_mesh.getIndices().size();
-
-        for (std::size_t i = 0; i < halfVertCount; ++i) {
-            const Vertex& v = m_mesh.getVertices()[i];
-            m_mesh.addVertex(
-                glm::vec3(v.position.x, -v.position.y, v.position.z),
-                glm::vec3(v.normal.x, -v.normal.y, v.normal.z)
-            );
-        }
-
-        const auto vertOffset = static_cast<std::uint32_t>(halfVertCount);
-        for (std::size_t i = 0; i + 2 < halfIdxCount; i += 3) {
-            const auto i0 = m_mesh.getIndices()[i];
-            const auto i1 = m_mesh.getIndices()[i + 1];
-            const auto i2 = m_mesh.getIndices()[i + 2];
-            // Reverse winding for negative-Y reflection so outward normals stay valid.
-            m_mesh.addTriangle(vertOffset + i0, vertOffset + i2, vertOffset + i1);
-        }
+        const std::vector<std::vector<glm::vec3>> leftRings = buildHalfRings(-1.0f);
+        appendWingHalf(m_mesh, leftRings, false, m_capTips, true);
     }
 
     m_wettedArea = computeMeshSurfaceArea(m_mesh);

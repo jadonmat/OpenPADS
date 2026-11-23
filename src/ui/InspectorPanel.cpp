@@ -10,8 +10,12 @@
 
 #include "core/Airfoil.hpp"
 #include "core/Fuselage.hpp"
+#include "core/ImportedMesh.hpp"
+#include "core/LandingGear.hpp"
 #include "core/Parameter.hpp"
+#include "core/Pod.hpp"
 #include "core/ProjectSerializer.hpp"
+#include "core/Propeller.hpp"
 #include "core/Wing.hpp"
 #include "ui/AirfoilUiHelper.hpp"
 
@@ -139,6 +143,18 @@ void InspectorPanel::renderComponentProperties(Component& component) {
     } else if (auto* fuse = dynamic_cast<Fuselage*>(&component)) {
         ImGui::Spacing();
         renderFuselageEditor(*fuse);
+    } else if (auto* pod = dynamic_cast<Pod*>(&component)) {
+        ImGui::Spacing();
+        renderPodEditor(*pod);
+    } else if (auto* prop = dynamic_cast<Propeller*>(&component)) {
+        ImGui::Spacing();
+        renderPropellerEditor(*prop);
+    } else if (auto* gear = dynamic_cast<LandingGear*>(&component)) {
+        ImGui::Spacing();
+        renderLandingGearEditor(*gear);
+    } else if (auto* imp = dynamic_cast<ImportedMesh*>(&component)) {
+        ImGui::Spacing();
+        renderImportedMeshEditor(*imp);
     } else {
         ImGui::Spacing();
         renderTransformSection(component);
@@ -167,6 +183,10 @@ void InspectorPanel::renderWingEditor(Wing& wing) {
         }
         if (ImGui::BeginTabItem("Cross Sections")) {
             renderWingCrossSectionsTab(wing);
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Controls")) {
+            renderWingControlsTab(wing);
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("Transform")) {
@@ -312,6 +332,58 @@ void InspectorPanel::renderWingCrossSectionsTab(Wing& wing) {
 
     if (changed) {
         wing.syncSectionsFromCrossSection(selectedXSec);
+    }
+}
+
+void InspectorPanel::renderWingControlsTab(Wing& wing) {
+    if (ImGui::Button("+ Aileron")) {
+        wing.addControlSurface(ControlSurface("Aileron", 0, 0.55, 0.92, 0.25, 0.0, false));
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("+ Flap")) {
+        wing.addControlSurface(ControlSurface("Flap", 0, 0.08, 0.50, 0.28, 0.0, true));
+    }
+
+    if (wing.getControlSurfaceCount() == 0) {
+        ImGui::TextDisabled("No trailing-edge control surfaces yet.");
+        return;
+    }
+
+    std::optional<std::size_t> removeIdx;
+    for (std::size_t i = 0; i < wing.getControlSurfaceCount(); ++i) {
+        ControlSurface& cs = wing.getControlSurface(i);
+        ImGui::PushID(static_cast<int>(i));
+        if (ImGui::CollapsingHeader(cs.getName().c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+            std::string name = cs.getName();
+            if (editStringField("Label", name, 48)) {
+                cs.setName(std::move(name));
+            }
+            int bayIdx = static_cast<int>(cs.getBayIndex());
+            if (ImGui::SliderInt("Bay Index", &bayIdx, 0, static_cast<int>(wing.getSectionCount() - 1))) {
+                cs.setBayIndex(static_cast<std::size_t>(bayIdx));
+                wing.markDirty();
+            }
+            bool changed = false;
+            changed |= editParameterDrag(cs.spanStartFrac());
+            changed |= editParameterDrag(cs.spanEndFrac());
+            changed |= editParameterDrag(cs.chordFrac());
+            changed |= editParameterDrag(cs.deflectionDeg());
+            bool sym = cs.isSymmetric();
+            if (ImGui::Checkbox("Symmetric Deflection", &sym)) {
+                cs.setSymmetric(sym);
+                changed = true;
+            }
+            if (changed) {
+                wing.markDirty();
+            }
+            if (ImGui::Button("Remove Surface")) {
+                removeIdx = i;
+            }
+        }
+        ImGui::PopID();
+    }
+    if (removeIdx.has_value()) {
+        wing.removeControlSurface(*removeIdx);
     }
 }
 
@@ -496,6 +568,169 @@ void InspectorPanel::renderFuselageSectionPreview(const FuselageSection& section
     }
 
     ImGui::Dummy(size);
+}
+
+void InspectorPanel::renderPodEditor(Pod& pod) {
+    ImGui::Text("Fineness: %.2f  |  Wetted: %.2f m^2  |  Vol: %.2f m^3",
+        pod.getFinenessRatio(), pod.getWettedArea(), pod.getVolume());
+
+    if (ImGui::BeginTabBar("##PodTabs")) {
+        if (ImGui::BeginTabItem("Geometry")) {
+            int symIdx = (pod.getSymmetry() == SymmetryMode::XZ) ? 1 : 0;
+            const char* symItems[] = {"None", "XZ Mirror"};
+            if (ImGui::Combo("Symmetry", &symIdx, symItems, 2)) {
+                pod.setSymmetry(symIdx == 1 ? SymmetryMode::XZ : SymmetryMode::None);
+            }
+            bool changed = false;
+            changed |= editParameterDrag(pod.length());
+            changed |= editParameterDrag(pod.width());
+            changed |= editParameterDrag(pod.height());
+            changed |= editParameterDrag(pod.noseFrac());
+            changed |= editParameterDrag(pod.tailFrac());
+            changed |= editParameterDrag(pod.nosePower());
+            changed |= editParameterDrag(pod.tailPower());
+            changed |= editParameterDrag(pod.superEllipseN());
+            if (changed) {
+                pod.markDirty();
+            }
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Transform")) {
+            renderTransformSection(pod);
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+    }
+}
+
+void InspectorPanel::renderPropellerEditor(Propeller& prop) {
+    ImGui::Text("Disk Area: %.2f m^2  |  Solidity: %.3f", prop.getDiskArea(), prop.getSolidity());
+
+    if (ImGui::BeginTabBar("##PropTabs")) {
+        if (ImGui::BeginTabItem("Rotor & Blades")) {
+            int blades = prop.getBladeCount();
+            if (ImGui::SliderInt("Blades", &blades, 2, 8)) {
+                prop.setBladeCount(blades);
+            }
+            bool cw = prop.isClockwise();
+            if (ImGui::Checkbox("Clockwise", &cw)) {
+                prop.setClockwise(cw);
+            }
+            ImGui::SameLine();
+            bool disk = prop.getShowDiskRing();
+            if (ImGui::Checkbox("Disk Ring", &disk)) {
+                prop.setShowDiskRing(disk);
+            }
+
+            bool changed = false;
+            changed |= editParameterDrag(prop.diameter());
+            changed |= editParameterDrag(prop.hubDiameter());
+            changed |= editParameterDrag(prop.spinnerLength());
+            changed |= editParameterDrag(prop.rootChord());
+            changed |= editParameterDrag(prop.tipChord());
+            changed |= editParameterDrag(prop.collectivePitchDeg());
+            changed |= editParameterDrag(prop.washoutDeg());
+            changed |= editParameterDrag(prop.sweepDeg());
+            if (changed) {
+                prop.markDirty();
+            }
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Blade Airfoil")) {
+            if (renderAirfoilEditor(prop.getBladeAirfoil())) {
+                prop.markDirty();
+            }
+            renderAirfoilPreview(prop.getBladeAirfoil());
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Transform")) {
+            renderTransformSection(prop);
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+    }
+}
+
+void InspectorPanel::renderLandingGearEditor(LandingGear& gear) {
+    ImGui::Text("Frontal Area: %.3f m^2  |  Wetted: %.2f m^2",
+        gear.getFrontalArea(), gear.getWettedArea());
+
+    if (ImGui::BeginTabBar("##GearTabs")) {
+        if (ImGui::BeginTabItem("Gear Geometry")) {
+            int symIdx = (gear.getSymmetry() == SymmetryMode::XZ) ? 1 : 0;
+            const char* symItems[] = {"Single (Nose/Tail)", "XZ Mirror (Main Gear)"};
+            if (ImGui::Combo("Symmetry", &symIdx, symItems, 2)) {
+                gear.setSymmetry(symIdx == 1 ? SymmetryMode::XZ : SymmetryMode::None);
+            }
+            int wheels = gear.getWheelsPerStrut();
+            if (ImGui::SliderInt("Wheels / Strut", &wheels, 1, 2)) {
+                gear.setWheelsPerStrut(wheels);
+            }
+            bool pant = gear.hasWheelPant();
+            if (ImGui::Checkbox("Streamlined Wheel Pant", &pant)) {
+                gear.setWheelPant(pant);
+            }
+
+            bool changed = false;
+            changed |= editParameterDrag(gear.strutLength());
+            changed |= editParameterDrag(gear.strutDiameter());
+            changed |= editParameterDrag(gear.rakeDeg());
+            changed |= editParameterDrag(gear.splayDeg());
+            changed |= editParameterDrag(gear.wheelDiameter());
+            changed |= editParameterDrag(gear.wheelWidth());
+            if (changed) {
+                gear.markDirty();
+            }
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Transform")) {
+            renderTransformSection(gear);
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+    }
+}
+
+void InspectorPanel::renderImportedMeshEditor(ImportedMesh& meshComp) {
+    ImGui::Text("Wetted Area: %.2f m^2", meshComp.getWettedArea());
+    if (!meshComp.getSourcePath().empty()) {
+        ImGui::TextWrapped("Source: %s", meshComp.getSourcePath().c_str());
+    }
+
+    if (ImGui::BeginTabBar("##ImportedMeshTabs")) {
+        if (ImGui::BeginTabItem("Conversion")) {
+            float unitScale = meshComp.getUnitScale();
+            if (ImGui::Button("Meters (1.0)")) meshComp.setUnitScale(1.0f);
+            ImGui::SameLine();
+            if (ImGui::Button("mm (0.001)")) meshComp.setUnitScale(0.001f);
+            ImGui::SameLine();
+            if (ImGui::Button("in (0.0254)")) meshComp.setUnitScale(0.0254f);
+            ImGui::SameLine();
+            if (ImGui::Button("ft (0.3048)")) meshComp.setUnitScale(0.3048f);
+
+            unitScale = meshComp.getUnitScale();
+            if (ImGui::DragFloat("Unit Scale", &unitScale, 0.001f, 0.0001f, 100.0f, "%.5f")) {
+                meshComp.setUnitScale(unitScale);
+            }
+
+            int axisIdx = (meshComp.getAxisConversion() == UpAxisConversion::YUpToZUp) ? 1 : 0;
+            const char* axisItems[] = {"Keep Z-Up", "Convert Y-Up -> Z-Up"};
+            if (ImGui::Combo("Up Axis", &axisIdx, axisItems, 2)) {
+                meshComp.setAxisConversion(axisIdx == 1 ? UpAxisConversion::YUpToZUp : UpAxisConversion::NoneZUp);
+            }
+
+            bool centerOrigin = meshComp.isCenterOrigin();
+            if (ImGui::Checkbox("Center Origin to Bounds", &centerOrigin)) {
+                meshComp.setCenterOrigin(centerOrigin);
+            }
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Transform")) {
+            renderTransformSection(meshComp);
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+    }
 }
 
 bool InspectorPanel::renderAirfoilEditor(Airfoil& airfoil) {

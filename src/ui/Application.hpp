@@ -36,6 +36,8 @@ private:
     void actionNewProject();
     void actionOpenProject();
     void actionSaveProject(bool forceSaveAs);
+    void actionImportOpenVsp();
+    void actionImportMesh();
     void actionExportStl();
     void actionExportObj();
 

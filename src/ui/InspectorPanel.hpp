@@ -16,10 +16,14 @@ namespace opads {
 class Airfoil;
 class Fuselage;
 class FuselageSection;
+class ImportedMesh;
+class LandingGear;
 class Parameter;
+class Pod;
+class Propeller;
 class Wing;
 
-/// Unified property editor for Aircraft, Transform, Wing, Fuselage, Cross Sections, and Airfoils.
+/// Unified property editor for all Aircraft components, Cross Sections, and Airfoils.
 class InspectorPanel : public Panel {
 public:
     InspectorPanel(Aircraft& aircraft, UndoStack& undoStack, GLFWwindow* window);
@@ -32,10 +36,15 @@ private:
     void renderWingEditor(Wing& wing);
     void renderWingPlanformTab(Wing& wing);
     void renderWingCrossSectionsTab(Wing& wing);
+    void renderWingControlsTab(Wing& wing);
     void renderFuselageEditor(Fuselage& fuselage);
     void renderFuselageLoftTab(Fuselage& fuselage);
     void renderFuselageSectionsTab(Fuselage& fuselage);
     void renderFuselageSectionPreview(const FuselageSection& section);
+    void renderPodEditor(Pod& pod);
+    void renderPropellerEditor(Propeller& prop);
+    void renderLandingGearEditor(LandingGear& gear);
+    void renderImportedMeshEditor(ImportedMesh& meshComp);
     void renderTransformSection(Component& component);
     bool renderAirfoilEditor(Airfoil& airfoil);
     void renderAirfoilPreview(const Airfoil& airfoil);

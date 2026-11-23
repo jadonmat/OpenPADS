@@ -11,6 +11,11 @@
 
 namespace opads {
 
+enum class SymmetryMode {
+    None,
+    XZ
+};
+
 /// Abstract base class for all parametric aircraft components (Wing, Fuselage, Pod, etc.).
 class Component {
 public:

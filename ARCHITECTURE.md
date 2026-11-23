@@ -100,18 +100,78 @@ classDiagram
 
         class Wing {
             -vector~WingSection~ m_sections
+            -vector~ControlSurface~ m_controlSurfaces
             -SymmetryMode m_symmetry
             -bool m_capTips
             -int m_chordPoints
             -size_t m_selectedCrossSection
             +addSection() void
             +removeSection(size_t idx) bool
+            +addControlSurface(ControlSurface) void
             +getPlanformArea() double
             +getSpan() double
             +getAspectRatio() double
             +getMeanAerodynamicChord() double
             +getWettedArea() double
             #rebuildMesh() void
+        }
+
+        class ControlSurface {
+            -string m_name
+            -size_t m_bayIndex
+            -Parameter m_spanStartFrac
+            -Parameter m_spanEndFrac
+            -Parameter m_chordFrac
+            -Parameter m_deflectionDeg
+            -bool m_symmetric
+        }
+
+        class Pod {
+            -Parameter m_length
+            -Parameter m_width
+            -Parameter m_height
+            -SymmetryMode m_symmetry
+            +getFinenessRatio() double
+            +getWettedArea() double
+            +getVolume() double
+            #rebuildMesh() void
+        }
+
+        class Propeller {
+            -Parameter m_diameter
+            -Parameter m_collectivePitchDeg
+            -int m_bladeCount
+            -Airfoil m_bladeAirfoil
+            +getDiskArea() double
+            +getSolidity() double
+            #rebuildMesh() void
+        }
+
+        class LandingGear {
+            -Parameter m_strutLength
+            -Parameter m_wheelDiameter
+            -int m_wheelsPerStrut
+            -bool m_wheelPant
+            -SymmetryMode m_symmetry
+            +getFrontalArea() double
+            +getWettedArea() double
+            #rebuildMesh() void
+        }
+
+        class ImportedMesh {
+            -vector~vec3~ m_rawPositions
+            -vector~uint32~ m_rawIndices
+            -float m_unitScale
+            -UpAxisConversion m_axisConversion
+            #rebuildMesh() void
+        }
+
+        class OpenVspImporter {
+            +importFromFile(Aircraft&, path) bool
+        }
+
+        class MeshImporter {
+            +importAuto(Aircraft&, path, float, UpAxisConversion) bool
         }
 
         class WingSection {
@@ -281,14 +341,22 @@ classDiagram
     Aircraft *-- "0..*" Component : owns
     Component <|-- Wing
     Component <|-- Fuselage
+    Component <|-- Pod
+    Component <|-- Propeller
+    Component <|-- LandingGear
+    Component <|-- ImportedMesh
     Component *-- "1" Transform : has
     Component *-- "1" Mesh : generates
     Wing *-- "1..*" WingSection : owns
+    Wing *-- "0..*" ControlSurface : owns
     WingSection *-- "9" Parameter : parameters
     WingSection *-- "2" Airfoil : root and tip sections
+    Propeller *-- "1" Airfoil : blade section
     Fuselage *-- "2..*" FuselageSection : owns
     FuselageSection *-- "7" Parameter : parameters
-    ProjectSerializer ..> Aircraft : saves/loads JSON
+    OpenVspImporter ..> Aircraft : imports .vsp3
+    MeshImporter ..> ImportedMesh : imports STL/OBJ
+    ProjectSerializer ..> Aircraft : saves/loads/duplicates JSON
     MeshExporter ..> Aircraft : exports STL/OBJ
 
     Application *-- "1" Aircraft : owns
@@ -341,12 +409,20 @@ flowchart TD
 | **Core** | `src/core/Transform.hpp/.cpp` | Aerospace Z-up position, Euler rotation, scale, and model matrix |
 | **Core** | `src/core/Parameter.hpp/.cpp` | Bounded engineering parameter with units, clamping, and change tracking |
 | **Core** | `src/core/Mesh.hpp/.cpp` | Indexed triangle mesh (`Vertex` positions + normals) |
+| **Core** | `src/core/MeshPrimitives.hpp/.cpp` | Shared lofted-ring, cylinder, XZ mirror, area & volume builders |
 | **Core** | `src/core/Airfoil.hpp/.cpp` | NACA 4/5-digit, Selig/Lednicer `.dat`, Kulfan CST sculpting & `.dat` export |
-| **Core** | `src/core/Component.hpp/.cpp` | Abstract base class for aircraft components (`Wing`, `Fuselage`, etc.) |
+| **Core** | `src/core/Component.hpp/.cpp` | Abstract base class for aircraft components (`Wing`, `Fuselage`, `Pod`, `Propeller`, `LandingGear`, `ImportedMesh`) |
+| **Core** | `src/core/ControlSurface.hpp/.cpp` | Wing trailing-edge control surfaces (ailerons, flaps, symmetric/differential) |
 | **Core** | `src/core/WingSection.hpp/.cpp` | Spanwise trapezoidal bay with chained root/tip airfoils & aero formulas |
-| **Core** | `src/core/Wing.hpp/.cpp` | Multi-section lofted wing mesh, `XZ` symmetry, tip caps, and highlight rings |
+| **Core** | `src/core/Wing.hpp/.cpp` | Multi-section lofted wing mesh, control surface deflection, `XZ` symmetry, tip caps |
 | **Core** | `src/core/FuselageSection.hpp/.cpp` | Parametric fuselage cross-section shapes (`Point`, `Circle`, `Ellipse`, `SuperEllipse`, `RoundedRect`) |
 | **Core** | `src/core/Fuselage.hpp/.cpp` | Multi-station PCHIP lofted fuselage, end caps, volume & fineness metrics |
+| **Core** | `src/core/Pod.hpp/.cpp` | Parametric engine nacelle, pod, and external store component |
+| **Core** | `src/core/Propeller.hpp/.cpp` | Multi-blade parametric rotor/propeller with spinner and blade airfoil |
+| **Core** | `src/core/LandingGear.hpp/.cpp` | Parametric landing gear (strut, oleo, single/dual wheels, wheel pant) |
+| **Core** | `src/core/ImportedMesh.hpp/.cpp` | Imported STL/OBJ mesh with live unit scale, axis conversion & re-centering |
+| **Core** | `src/core/MeshImporter.hpp/.cpp` | ASCII/Binary STL and Wavefront OBJ importer |
+| **Core** | `src/core/OpenVspImporter.hpp/.cpp` | Native OpenVSP `.vsp3` XML geometry importer |
 | **Core** | `src/core/ProjectSerializer.hpp/.cpp` | Portable JSON save/load (`.opads`) via `nlohmann/json` |
 | **Core** | `src/core/UndoStack.hpp/.cpp` | Snapshot-based Undo/Redo history (`Ctrl+Z` / `Ctrl+Y`) |
 | **Core** | `src/core/MeshExporter.hpp/.cpp` | World-space Binary STL and Wavefront OBJ exporter |

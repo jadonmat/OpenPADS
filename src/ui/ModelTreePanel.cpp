@@ -5,10 +5,27 @@
 #include <imgui.h>
 
 #include "core/Fuselage.hpp"
+#include "core/LandingGear.hpp"
+#include "core/Pod.hpp"
 #include "core/ProjectSerializer.hpp"
+#include "core/Propeller.hpp"
 #include "core/Wing.hpp"
 
 namespace opads {
+
+namespace {
+
+template <typename ComponentT>
+void addPartWithUndo(Aircraft& aircraft, UndoStack& undoStack, const std::string& baseName) {
+    const std::string before = ProjectSerializer::saveToString(aircraft);
+    const std::uint64_t newId = aircraft.allocateComponentId();
+    const std::string name = baseName + " " + std::to_string(newId);
+    aircraft.addComponent(std::make_unique<ComponentT>(newId, name));
+    aircraft.setSelectedComponentId(newId);
+    undoStack.pushSnapshot(before, aircraft, "Add " + name);
+}
+
+} // namespace
 
 ModelTreePanel::ModelTreePanel(Aircraft& aircraft, UndoStack& undoStack)
     : Panel("Model Tree")
@@ -27,25 +44,38 @@ void ModelTreePanel::onRender() {
     }
 
     if (ImGui::Button("+ Wing")) {
-        const std::string before = ProjectSerializer::saveToString(m_aircraft);
-        const std::uint64_t newId = m_aircraft.allocateComponentId();
-        const std::string wingName = "Wing " + std::to_string(newId);
-        m_aircraft.addComponent(std::make_unique<Wing>(newId, wingName));
-        m_aircraft.setSelectedComponentId(newId);
-        m_undoStack.pushSnapshot(before, m_aircraft, "Add " + wingName);
+        addPartWithUndo<Wing>(m_aircraft, m_undoStack, "Wing");
     }
     ImGui::SameLine();
-    if (ImGui::Button("+ Fuselage")) {
-        const std::string before = ProjectSerializer::saveToString(m_aircraft);
-        const std::uint64_t newId = m_aircraft.allocateComponentId();
-        const std::string fuseName = "Fuselage " + std::to_string(newId);
-        m_aircraft.addComponent(std::make_unique<Fuselage>(newId, fuseName));
-        m_aircraft.setSelectedComponentId(newId);
-        m_undoStack.pushSnapshot(before, m_aircraft, "Add " + fuseName);
+    if (ImGui::Button("+ Fuse")) {
+        addPartWithUndo<Fuselage>(m_aircraft, m_undoStack, "Fuselage");
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("+ More")) {
+        ImGui::OpenPopup("AddMorePartsPopup");
+    }
+
+    if (ImGui::BeginPopup("AddMorePartsPopup")) {
+        if (ImGui::MenuItem("Pod / Nacelle")) {
+            addPartWithUndo<Pod>(m_aircraft, m_undoStack, "Pod");
+        }
+        if (ImGui::MenuItem("Propeller / Rotor")) {
+            addPartWithUndo<Propeller>(m_aircraft, m_undoStack, "Propeller");
+        }
+        if (ImGui::MenuItem("Landing Gear")) {
+            addPartWithUndo<LandingGear>(m_aircraft, m_undoStack, "Landing Gear");
+        }
+        ImGui::EndPopup();
     }
 
     const auto selectedId = m_aircraft.getSelectedComponentId();
     if (selectedId.has_value()) {
+        if (ImGui::Button("Duplicate")) {
+            const std::string before = ProjectSerializer::saveToString(m_aircraft);
+            if (ProjectSerializer::duplicateComponent(m_aircraft, *selectedId) != nullptr) {
+                m_undoStack.pushSnapshot(before, m_aircraft, "Duplicate Part");
+            }
+        }
         ImGui::SameLine();
         if (ImGui::Button("Delete")) {
             const std::string before = ProjectSerializer::saveToString(m_aircraft);
@@ -73,9 +103,10 @@ void ModelTreePanel::onRender() {
     if (rootOpen) {
         const auto currentSelected = m_aircraft.getSelectedComponentId();
         if (m_aircraft.getComponents().empty()) {
-            ImGui::TextDisabled("Empty aircraft. Click + Wing or + Fuselage.");
+            ImGui::TextDisabled("Empty aircraft. Add a Wing, Fuselage, Pod, Prop, or Gear.");
         } else {
             std::optional<std::uint64_t> pendingDeleteId;
+            std::optional<std::uint64_t> pendingDupId;
             for (const auto& component : m_aircraft.getComponents()) {
                 ImGui::PushID(static_cast<int>(component->getId()));
 
@@ -107,8 +138,8 @@ void ModelTreePanel::onRender() {
                 }
 
                 if (ImGui::BeginPopupContextItem()) {
-                    if (ImGui::MenuItem("Select")) {
-                        m_aircraft.setSelectedComponentId(component->getId());
+                    if (ImGui::MenuItem("Duplicate")) {
+                        pendingDupId = component->getId();
                     }
                     if (ImGui::MenuItem("Delete")) {
                         pendingDeleteId = component->getId();
@@ -119,6 +150,12 @@ void ModelTreePanel::onRender() {
                 ImGui::PopID();
             }
 
+            if (pendingDupId.has_value()) {
+                const std::string before = ProjectSerializer::saveToString(m_aircraft);
+                if (ProjectSerializer::duplicateComponent(m_aircraft, *pendingDupId) != nullptr) {
+                    m_undoStack.pushSnapshot(before, m_aircraft, "Duplicate Part");
+                }
+            }
             if (pendingDeleteId.has_value()) {
                 const std::string before = ProjectSerializer::saveToString(m_aircraft);
                 if (m_aircraft.removeComponent(*pendingDeleteId)) {

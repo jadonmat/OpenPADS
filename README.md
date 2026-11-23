@@ -2,16 +2,18 @@
 
 **Open Parametric Aircraft Design Suite** — a modern C++20 aircraft design, parametric geometry modeling, and aerodynamic/flight-simulation workbench.
 
-> For a full breakdown of the OOP class hierarchy, module boundaries, and frame data flow, see **[ARCHITECTURE.md](ARCHITECTURE.md)**.
+> See **[PLAN.md](PLAN.md)** for the full 6-phase roadmap (Geometry Expansion → Aero Solvers → SU2 CFD → Aircraft Analysis → Flight Sim) and **[ARCHITECTURE.md](ARCHITECTURE.md)** for the OOP class hierarchy and frame data flow.
 
 ---
 
-## Features (Phase 1 Complete — Milestone 4)
+## Features (Phase 2 Complete)
 
 - **Clean OOP Layering:** Pure C++20 core model (`OpenPADS_Core`) decoupled from OpenGL rendering (`OpenPADS_Render`) and the dockable editor (`OpenPADS_UI`).
-- **Parametric Fuselage & Wing Lofting:**
-  - Multi-station `Fuselage` (`Point`, `Circle`, `Ellipse`, `SuperEllipse`, `RoundedRect`) with monotonic PCHIP smooth lofting, end capping, and live `Length`, `Fineness Ratio`, `Wetted Area`, and `Volume`.
-  - Multi-bay trapezoidal `Wing` (`Span`, `Root/Tip Chord`, `Sweep @ fraction`, `Dihedral`, `Twist`) with `XZ` symmetry, watertight tip caps, and live $S, b, AR, c_{\text{MAC}}, S_{\text{wet}}$.
+- **Full Aircraft Geometry Suite:**
+  - Multi-bay trapezoidal `Wing` with trailing-edge **Control Surfaces** (ailerons, flaps, symmetric/differential deflection), `XZ` symmetry, watertight tip caps, and live $S, b, AR, c_{\text{MAC}}, S_{\text{wet}}$.
+  - Multi-station `Fuselage` (`Point`, `Circle`, `Ellipse`, `SuperEllipse`, `RoundedRect`) with monotonic PCHIP smooth lofting, end capping, `Fineness Ratio`, `Wetted Area`, and `Volume`.
+  - Parametric **`Pod` / Nacelle**, **`Propeller` / Rotor** (multi-blade twisted airfoil + spinner + disk area/solidity), and **`LandingGear`** (strut, oleo, single/dual wheels, wheel pant, `XZ` mirror).
+- **Importers & Part Duplication:** Native **OpenVSP (`.vsp3`)** XML importer (`Wing`, `Fuselage`, `Pod`, `Propeller`), **STL (ASCII/Binary) & Wavefront OBJ** importer with live unit scaling & `Y-Up → Z-Up` conversion, and one-click `Duplicate`.
 - **Interactive 3D Viewport Modeler:** Left-click 3D ray picking (automatically selects the nearest wing or fuselage cross-section), `Part` / `XSec (Tab)` target toggle, `Select (Q)` / `Move (W)` / `Rotate (R)` / `Scale (S)` 3D gizmos (chord, thickness, twist, width/height, span/sweep/dihedral directly in 3D), **Geometry Snap** (mesh-to-mesh contact & feature snapping between parts), and full `Ctrl+Z` / `Ctrl+Y` Undo/Redo history.
 - **Dedicated Airfoil Editor (`ImPlot`):** Interactive 2D airfoil/camber plot, NACA 4/5-digit generators, searchable 49-airfoil UIUC `.dat` library (`data/airfoils/`) with `.dat` file upload, CST Bernstein sculpting with draggable control points, and `.dat` export.
 - **Project Persistence & CAD Mesh Export:** JSON save/load (`.opads`) via `nlohmann/json` plus world-space **Binary STL** and **Wavefront OBJ** export.

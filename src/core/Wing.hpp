@@ -8,14 +8,10 @@
 #include <glm/vec3.hpp>
 
 #include "core/Component.hpp"
+#include "core/ControlSurface.hpp"
 #include "core/WingSection.hpp"
 
 namespace opads {
-
-enum class SymmetryMode {
-    None,
-    XZ
-};
 
 /// Parametric multi-section lofted wing component.
 class Wing : public Component {
@@ -47,6 +43,13 @@ public:
     void addSection();
     bool removeSection(std::size_t index);
 
+    std::size_t getControlSurfaceCount() const noexcept;
+    ControlSurface& getControlSurface(std::size_t index);
+    const ControlSurface& getControlSurface(std::size_t index) const;
+    const std::vector<ControlSurface>& getControlSurfaces() const noexcept;
+    void addControlSurface(ControlSurface surface);
+    bool removeControlSurface(std::size_t index);
+
     /// Synchronizes chained root/tip chord, twist, and airfoil after editing a bay or cross-section.
     void syncSectionsFromBay(std::size_t bayIndex);
     void syncSectionsFromCrossSection(std::size_t xsecIndex);
@@ -76,12 +79,14 @@ protected:
 
 private:
     std::vector<WingSection> m_sections;
+    std::vector<ControlSurface> m_controlSurfaces;
     SymmetryMode m_symmetry{SymmetryMode::XZ};
     bool m_capTips{true};
     int m_chordPoints{41};
     std::size_t m_selectedCrossSection{0};
 
     std::vector<std::vector<glm::vec3>> m_crossSectionRings;
+    std::vector<std::vector<glm::vec3>> m_controlSurfaceOutlines;
     double m_wettedArea{0.0};
 };
 

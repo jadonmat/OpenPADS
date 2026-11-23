@@ -1,6 +1,8 @@
 #pragma once
 
+#include <filesystem>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "core/Aircraft.hpp"
@@ -29,11 +31,17 @@ private:
     void renderDockspace();
     void renderMenuBar();
     void buildDefaultDockLayout(unsigned int dockspaceId);
+    void actionNewProject();
+    void actionOpenProject();
+    void actionSaveProject(bool forceSaveAs);
+    void actionExportStl();
+    void actionExportObj();
 
     GLFWwindow* m_window{nullptr};
     Aircraft m_aircraft;
     Viewport3D m_viewport;
     std::vector<std::unique_ptr<Panel>> m_panels;
+    std::optional<std::filesystem::path> m_currentProjectPath;
     bool m_dockLayoutBuilt{false};
 };
 

@@ -56,6 +56,39 @@ classDiagram
             #rebuildMesh()* void
         }
 
+        class Fuselage {
+            -Parameter m_length
+            -bool m_smoothLoft
+            -bool m_capEnds
+            -vector~FuselageSection~ m_sections
+            +addSectionAfter(size_t idx) void
+            +removeSection(size_t idx) bool
+            +getFinenessRatio() double
+            +getWettedArea() double
+            +getVolume() double
+            #rebuildMesh() void
+        }
+
+        class FuselageSection {
+            -CrossSectionShape m_shape
+            -Parameter m_stationFrac
+            -Parameter m_width
+            -Parameter m_height
+            -Parameter m_zOffset
+            -Parameter m_superEllipseN
+            +sampleLoopYZ(int radialPoints) vector~vec2~
+        }
+
+        class ProjectSerializer {
+            +saveToFile(Aircraft, path) bool
+            +loadFromFile(Aircraft&, path) bool
+        }
+
+        class MeshExporter {
+            +exportBinaryStl(Aircraft, path) bool
+            +exportObj(Aircraft, path) bool
+        }
+
         class Wing {
             -vector~WingSection~ m_sections
             -SymmetryMode m_symmetry
@@ -230,11 +263,16 @@ classDiagram
 
     Aircraft *-- "0..*" Component : owns
     Component <|-- Wing
+    Component <|-- Fuselage
     Component *-- "1" Transform : has
     Component *-- "1" Mesh : generates
     Wing *-- "1..*" WingSection : owns
     WingSection *-- "9" Parameter : parameters
     WingSection *-- "2" Airfoil : root and tip sections
+    Fuselage *-- "2..*" FuselageSection : owns
+    FuselageSection *-- "7" Parameter : parameters
+    ProjectSerializer ..> Aircraft : saves/loads JSON
+    MeshExporter ..> Aircraft : exports STL/OBJ
 
     Application *-- "1" Aircraft : owns
     Application *-- "1" Viewport3D : owns
@@ -290,6 +328,10 @@ flowchart TD
 | **Core** | `src/core/Component.hpp/.cpp` | Abstract base class for aircraft components (`Wing`, `Fuselage`, etc.) |
 | **Core** | `src/core/WingSection.hpp/.cpp` | Spanwise trapezoidal bay with chained root/tip airfoils & aero formulas |
 | **Core** | `src/core/Wing.hpp/.cpp` | Multi-section lofted wing mesh, `XZ` symmetry, tip caps, and highlight rings |
+| **Core** | `src/core/FuselageSection.hpp/.cpp` | Parametric fuselage cross-section shapes (`Point`, `Circle`, `Ellipse`, `SuperEllipse`, `RoundedRect`) |
+| **Core** | `src/core/Fuselage.hpp/.cpp` | Multi-station PCHIP lofted fuselage, end caps, volume & fineness metrics |
+| **Core** | `src/core/ProjectSerializer.hpp/.cpp` | Portable JSON save/load (`.opads`) via `nlohmann/json` |
+| **Core** | `src/core/MeshExporter.hpp/.cpp` | World-space Binary STL and Wavefront OBJ exporter |
 | **Core** | `src/core/Aircraft.hpp/.cpp` | Root container owning components, IDs, selection, and dirty rebuilds |
 | **Render** | `src/render/OrbitCamera.hpp/.cpp` | Spherical orbit/pan/zoom camera, CAD view presets, and screen-to-ray unprojection |
 | **Render** | `src/render/RayPicker.hpp/.cpp` | Möller–Trumbore 3D picking against component meshes & wing cross-sections |
@@ -299,6 +341,7 @@ flowchart TD
 | **Render** | `src/render/GridRenderer.hpp/.cpp` | Procedural anti-aliased `Z = 0` grid and origin RGB triad |
 | **Render** | `src/render/Viewport3D.hpp/.cpp` | Offscreen FBO renderer, lighting shader, highlight loop overlay, gizmo, and mesh cache |
 | **UI** | `src/ui/Panel.hpp/.cpp` | Abstract base class for dockable UI panels |
+| **UI** | `src/ui/FileDialog.hpp/.cpp` | Native OS Open/Save/Export file dialogs |
 | **UI** | `src/ui/ModelTreePanel.hpp/.cpp` | Hierarchy outliner for adding, removing, and selecting components |
 | **UI** | `src/ui/InspectorPanel.hpp/.cpp` | Unified tabbed editor for Wing bays, Cross Sections, Airfoils & Transform |
 | **UI** | `src/ui/AirfoilEditorPanel.hpp/.cpp` | Interactive `ImPlot` 2D airfoil editor, CST sculpting, and `.dat` export |

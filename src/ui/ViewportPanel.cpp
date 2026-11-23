@@ -4,6 +4,7 @@
 
 #include <imgui.h>
 
+#include "core/Fuselage.hpp"
 #include "core/Wing.hpp"
 #include "render/RayPicker.hpp"
 
@@ -188,8 +189,11 @@ void ViewportPanel::handleViewportInput(bool imageHovered, const glm::vec2& imag
             if (pick.hit) {
                 m_aircraft.setSelectedComponentId(pick.componentId);
                 if (pick.crossSectionIndex.has_value()) {
-                    if (auto* wing = dynamic_cast<Wing*>(m_aircraft.findComponent(pick.componentId))) {
+                    Component* pickedComp = m_aircraft.findComponent(pick.componentId);
+                    if (auto* wing = dynamic_cast<Wing*>(pickedComp)) {
                         wing->setSelectedCrossSection(*pick.crossSectionIndex);
+                    } else if (auto* fuse = dynamic_cast<Fuselage*>(pickedComp)) {
+                        fuse->setSelectedSection(*pick.crossSectionIndex);
                     }
                 }
             } else {

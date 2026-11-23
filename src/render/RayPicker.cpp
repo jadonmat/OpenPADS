@@ -6,6 +6,7 @@
 #include <glm/geometric.hpp>
 #include <glm/mat4x4.hpp>
 
+#include "core/Fuselage.hpp"
 #include "core/Wing.hpp"
 
 namespace opads {
@@ -109,6 +110,18 @@ PickResult RayPicker::pickAircraft(const Ray& worldRay, const Aircraft& aircraft
                         const float distSq = dy * dy + dz * dz;
                         if (distSq < bestSecDist) {
                             bestSecDist = distSq;
+                            bestIdx = s;
+                        }
+                    }
+                    best.crossSectionIndex = bestIdx;
+                } else if (const auto* fuse = dynamic_cast<const Fuselage*>(component.get())) {
+                    float bestDistX = std::numeric_limits<float>::max();
+                    std::size_t bestIdx = 0;
+                    for (std::size_t s = 0; s < fuse->getSectionCount(); ++s) {
+                        const glm::vec3 c = fuse->getSectionCenterLocal(s);
+                        const float dx = std::abs(localHit.x - c.x);
+                        if (dx < bestDistX) {
+                            bestDistX = dx;
                             bestIdx = s;
                         }
                     }

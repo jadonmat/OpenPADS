@@ -10,10 +10,12 @@
 namespace opads {
 
 class Airfoil;
+class Fuselage;
+class FuselageSection;
 class Parameter;
 class Wing;
 
-/// Unified property editor for Aircraft, Transform, Wing bays, Cross Sections, and Airfoils.
+/// Unified property editor for Aircraft, Transform, Wing, Fuselage, Cross Sections, and Airfoils.
 class InspectorPanel : public Panel {
 public:
     explicit InspectorPanel(Aircraft& aircraft);
@@ -26,6 +28,10 @@ private:
     void renderWingEditor(Wing& wing);
     void renderWingPlanformTab(Wing& wing);
     void renderWingCrossSectionsTab(Wing& wing);
+    void renderFuselageEditor(Fuselage& fuselage);
+    void renderFuselageLoftTab(Fuselage& fuselage);
+    void renderFuselageSectionsTab(Fuselage& fuselage);
+    void renderFuselageSectionPreview(const FuselageSection& section);
     void renderTransformSection(Component& component);
     bool renderAirfoilEditor(Airfoil& airfoil);
     void renderAirfoilPreview(const Airfoil& airfoil);

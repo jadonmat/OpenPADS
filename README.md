@@ -6,13 +6,16 @@
 
 ---
 
-## Features (Milestone 3)
+## Features (Phase 1 Complete — Milestone 4)
 
 - **Clean OOP Layering:** Pure C++20 core model (`OpenPADS_Core`) decoupled from OpenGL rendering (`OpenPADS_Render`) and the dockable editor (`OpenPADS_UI`).
-- **Interactive 3D Viewport Modeler:** Left-click 3D ray picking (automatically selects the nearest wing cross-section), `Select (Q)` / `Move (W)` / `XSec (E)` 3D axis manipulation gizmos to drag components or reshape span/sweep/dihedral directly in 3D.
+- **Parametric Fuselage & Wing Lofting:**
+  - Multi-station `Fuselage` (`Point`, `Circle`, `Ellipse`, `SuperEllipse`, `RoundedRect`) with monotonic PCHIP smooth lofting, end capping, and live `Length`, `Fineness Ratio`, `Wetted Area`, and `Volume`.
+  - Multi-bay trapezoidal `Wing` (`Span`, `Root/Tip Chord`, `Sweep @ fraction`, `Dihedral`, `Twist`) with `XZ` symmetry, watertight tip caps, and live $S, b, AR, c_{\text{MAC}}, S_{\text{wet}}$.
+- **Interactive 3D Viewport Modeler:** Left-click 3D ray picking (automatically selects the nearest wing or fuselage cross-section), `Select (Q)` / `Move (W)` / `XSec (E)` 3D axis manipulation gizmos to move components or reshape cross-sections directly in 3D.
 - **Dedicated Airfoil Editor (`ImPlot`):** Interactive 2D airfoil/camber plot, NACA 4/5-digit generators, Selig/Lednicer `.dat` library (`data/airfoils/`), CST Bernstein sculpting with draggable control points, and `.dat` export.
-- **Parametric Wing & Cross-Section Lofting:** Multi-bay trapezoidal `Wing` components (`Span`, `Root/Tip Chord`, `Sweep @ fraction`, `Dihedral`, `Twist`) with `XZ` symmetry, watertight tip caps, live aero metrics ($S, b, AR, c_{\text{MAC}}, S_{\text{wet}}$), and 3D cross-section ring highlighting.
-- **Dockable CAD Workspace:** Built with `GLFW`, `OpenGL 4.5` (`GLAD`), `Dear ImGui` (Docking), and `ImPlot` featuring a **Model Tree**, **3D Viewport**, **Airfoil Editor**, and unified **Inspector**.
+- **Project Persistence & CAD Mesh Export:** JSON save/load (`.opads`) via `nlohmann/json` plus world-space **Binary STL** and **Wavefront OBJ** export.
+- **Dockable CAD Workspace:** Built with `GLFW`, `OpenGL 4.5` (`GLAD`), `Dear ImGui` (Docking), and `ImPlot`.
 
 ### Viewport Controls
 
@@ -51,4 +54,4 @@ Run the editor:
 - [x] **Milestone 1:** CMake architecture, dockable UI shell, offscreen 3D viewport, `OrbitCamera`, and reference grid
 - [x] **Milestone 2:** Parametric `Airfoil` (NACA 4/5-digit + Selig/Lednicer `.dat` library), `Parameter`, and multi-section `Wing` lofting with unified cross-section inspector
 - [x] **Milestone 3:** Interactive 3D viewport modeler (click-to-select & 3D drag gizmos) and dedicated `ImPlot` Airfoil Editor (with CST sculpting & `.dat` export)
-- [ ] **Milestone 4:** Parametric `Fuselage` lofting, JSON project save/load, and STL/OBJ export
+- [x] **Milestone 4:** Parametric `Fuselage` lofting (PCHIP smooth stations), JSON project save/load (`.opads`), and Binary STL / OBJ export

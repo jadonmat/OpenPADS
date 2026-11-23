@@ -57,7 +57,14 @@ FetchContent_Declare(
     GIT_SHALLOW    TRUE
 )
 
-FetchContent_MakeAvailable(glfw glm glad imgui implot)
+FetchContent_Declare(
+    nlohmann_json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG        v3.11.3
+    GIT_SHALLOW    TRUE
+)
+
+FetchContent_MakeAvailable(glfw glm glad imgui implot nlohmann_json)
 
 glad_add_library(glad_gl_core_45 STATIC API gl:core=4.5)
 
@@ -97,11 +104,19 @@ add_library(OpenPADS_Core STATIC
     src/core/WingSection.cpp
     src/core/Wing.hpp
     src/core/Wing.cpp
+    src/core/FuselageSection.hpp
+    src/core/FuselageSection.cpp
+    src/core/Fuselage.hpp
+    src/core/Fuselage.cpp
+    src/core/ProjectSerializer.hpp
+    src/core/ProjectSerializer.cpp
+    src/core/MeshExporter.hpp
+    src/core/MeshExporter.cpp
     src/core/Aircraft.hpp
     src/core/Aircraft.cpp
 )
 target_include_directories(OpenPADS_Core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(OpenPADS_Core PUBLIC glm::glm)
+target_link_libraries(OpenPADS_Core PUBLIC glm::glm nlohmann_json::nlohmann_json)
 target_compile_definitions(OpenPADS_Core PUBLIC OPENPADS_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
 
 # ------------------------------------------------------------------------------
@@ -137,6 +152,8 @@ target_link_libraries(OpenPADS_Render PUBLIC
 add_library(OpenPADS_UI STATIC
     src/ui/Panel.hpp
     src/ui/Panel.cpp
+    src/ui/FileDialog.hpp
+    src/ui/FileDialog.cpp
     src/ui/ModelTreePanel.hpp
     src/ui/ModelTreePanel.cpp
     src/ui/InspectorPanel.hpp
@@ -155,6 +172,9 @@ target_link_libraries(OpenPADS_UI PUBLIC
     imgui
     glfw
 )
+if (WIN32)
+    target_link_libraries(OpenPADS_UI PUBLIC comdlg32)
+endif()
 
 # ------------------------------------------------------------------------------
 # OpenPADS Executable

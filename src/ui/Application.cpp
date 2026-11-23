@@ -10,7 +10,10 @@
 #include <imgui_internal.h>
 #include <implot.h>
 
+#include "core/MeshExporter.hpp"
+#include "core/ProjectSerializer.hpp"
 #include "ui/AirfoilEditorPanel.hpp"
+#include "ui/FileDialog.hpp"
 #include "ui/InspectorPanel.hpp"
 #include "ui/ModelTreePanel.hpp"
 #include "ui/ViewportPanel.hpp"
@@ -193,9 +196,28 @@ void Application::renderMenuBar() {
     }
 
     if (ImGui::BeginMenu("File")) {
-        ImGui::MenuItem("New Aircraft (Milestone 4)", nullptr, false, false);
-        ImGui::MenuItem("Open... (Milestone 4)", nullptr, false, false);
-        ImGui::MenuItem("Save... (Milestone 4)", nullptr, false, false);
+        if (ImGui::MenuItem("New Aircraft")) {
+            actionNewProject();
+        }
+        if (ImGui::MenuItem("Open Project...")) {
+            actionOpenProject();
+        }
+        if (ImGui::MenuItem("Save Project")) {
+            actionSaveProject(false);
+        }
+        if (ImGui::MenuItem("Save Project As...")) {
+            actionSaveProject(true);
+        }
+        ImGui::Separator();
+        if (ImGui::BeginMenu("Export")) {
+            if (ImGui::MenuItem("Binary STL (.stl)...")) {
+                actionExportStl();
+            }
+            if (ImGui::MenuItem("Wavefront OBJ (.obj)...")) {
+                actionExportObj();
+            }
+            ImGui::EndMenu();
+        }
         ImGui::Separator();
         if (ImGui::MenuItem("Exit", "Alt+F4")) {
             glfwSetWindowShouldClose(m_window, GLFW_TRUE);
@@ -254,6 +276,69 @@ void Application::buildDefaultDockLayout(unsigned int dockspaceId) {
     ImGui::DockBuilderDockWindow("Airfoil Editor", centerId);
     ImGui::DockBuilderDockWindow("Inspector", rightId);
     ImGui::DockBuilderFinish(dockspaceId);
+}
+
+void Application::actionNewProject() {
+    m_aircraft = Aircraft("Untitled Aircraft");
+    m_currentProjectPath.reset();
+}
+
+void Application::actionOpenProject() {
+    const auto path = FileDialog::openFile(
+        m_window,
+        "OpenPADS Project (*.opads;*.json)\0*.opads;*.json\0All Files (*.*)\0*.*\0",
+        "Open OpenPADS Aircraft Project"
+    );
+    if (!path.has_value()) {
+        return;
+    }
+    if (ProjectSerializer::loadFromFile(m_aircraft, *path)) {
+        m_currentProjectPath = *path;
+    }
+}
+
+void Application::actionSaveProject(bool forceSaveAs) {
+    std::optional<std::filesystem::path> target = m_currentProjectPath;
+    if (forceSaveAs || !target.has_value()) {
+        target = FileDialog::saveFile(
+            m_window,
+            "OpenPADS Project (*.opads)\0*.opads\0JSON Files (*.json)\0*.json\0",
+            "opads",
+            "Save OpenPADS Aircraft Project"
+        );
+    }
+    if (!target.has_value()) {
+        return;
+    }
+    if (ProjectSerializer::saveToFile(m_aircraft, *target)) {
+        m_currentProjectPath = *target;
+    }
+}
+
+void Application::actionExportStl() {
+    const auto path = FileDialog::saveFile(
+        m_window,
+        "STL Mesh (*.stl)\0*.stl\0",
+        "stl",
+        "Export Binary STL"
+    );
+    if (path.has_value()) {
+        m_aircraft.rebuildDirty();
+        MeshExporter::exportBinaryStl(m_aircraft, *path);
+    }
+}
+
+void Application::actionExportObj() {
+    const auto path = FileDialog::saveFile(
+        m_window,
+        "Wavefront OBJ (*.obj)\0*.obj\0",
+        "obj",
+        "Export Wavefront OBJ"
+    );
+    if (path.has_value()) {
+        m_aircraft.rebuildDirty();
+        MeshExporter::exportObj(m_aircraft, *path);
+    }
 }
 
 } // namespace opads

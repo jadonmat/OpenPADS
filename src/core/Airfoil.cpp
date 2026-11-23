@@ -438,19 +438,29 @@ bool Airfoil::loadFromDatString(std::string_view contents, std::string fallbackN
     return true;
 }
 
-bool Airfoil::saveToDatFile(const std::filesystem::path& path) const {
+std::string Airfoil::toDatString() const {
     if (m_loop.empty()) {
+        return {};
+    }
+    std::ostringstream out;
+    out << m_name << '\n';
+    out << std::fixed << std::setprecision(6);
+    for (const glm::vec2& pt : m_loop) {
+        out << std::setw(10) << pt.x << "  " << std::setw(10) << pt.y << '\n';
+    }
+    return out.str();
+}
+
+bool Airfoil::saveToDatFile(const std::filesystem::path& path) const {
+    const std::string contents = toDatString();
+    if (contents.empty()) {
         return false;
     }
     std::ofstream out(path);
     if (!out.is_open()) {
         return false;
     }
-    out << m_name << '\n';
-    out << std::fixed << std::setprecision(6);
-    for (const glm::vec2& pt : m_loop) {
-        out << std::setw(10) << pt.x << "  " << std::setw(10) << pt.y << '\n';
-    }
+    out << contents;
     return out.good();
 }
 

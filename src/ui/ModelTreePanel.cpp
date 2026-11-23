@@ -4,6 +4,7 @@
 
 #include <imgui.h>
 
+#include "core/Fuselage.hpp"
 #include "core/Wing.hpp"
 
 namespace opads {
@@ -44,7 +45,12 @@ void ModelTreePanel::onRender() {
             m_aircraft.addComponent(std::make_unique<Wing>(newId, wingName));
             m_aircraft.setSelectedComponentId(newId);
         }
-        ImGui::MenuItem("Fuselage (Milestone 4)", nullptr, false, false);
+        if (ImGui::MenuItem("Fuselage")) {
+            const std::uint64_t newId = m_aircraft.allocateComponentId();
+            const std::string fuseName = "Fuselage " + std::to_string(newId);
+            m_aircraft.addComponent(std::make_unique<Fuselage>(newId, fuseName));
+            m_aircraft.setSelectedComponentId(newId);
+        }
         ImGui::EndPopup();
     }
 

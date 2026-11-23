@@ -9,6 +9,7 @@
 #include <imgui.h>
 
 #include "core/Airfoil.hpp"
+#include "core/Fuselage.hpp"
 #include "core/Parameter.hpp"
 #include "core/Wing.hpp"
 
@@ -133,6 +134,9 @@ void InspectorPanel::renderComponentProperties(Component& component) {
     if (auto* wing = dynamic_cast<Wing*>(&component)) {
         ImGui::Spacing();
         renderWingEditor(*wing);
+    } else if (auto* fuse = dynamic_cast<Fuselage*>(&component)) {
+        ImGui::Spacing();
+        renderFuselageEditor(*fuse);
     } else {
         ImGui::Spacing();
         renderTransformSection(component);
@@ -296,6 +300,177 @@ void InspectorPanel::renderWingCrossSectionsTab(Wing& wing) {
     if (changed) {
         wing.syncSectionsFromCrossSection(selectedXSec);
     }
+}
+
+void InspectorPanel::renderFuselageEditor(Fuselage& fuselage) {
+    if (ImGui::BeginTable("##FuseMetrics", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchSame)) {
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::Text("Length:   %.2f m", fuselage.length().getValue());
+        ImGui::Text("Max W:    %.2f m", fuselage.getMaxWidth());
+        ImGui::Text("Max H:    %.2f m", fuselage.getMaxHeight());
+        ImGui::TableSetColumnIndex(1);
+        ImGui::Text("Fineness: %.2f", fuselage.getFinenessRatio());
+        ImGui::Text("Wetted:   %.2f m^2", fuselage.getWettedArea());
+        ImGui::Text("Volume:   %.2f m^3", fuselage.getVolume());
+        ImGui::EndTable();
+    }
+
+    ImGui::Spacing();
+    if (ImGui::BeginTabBar("##FuseTabs")) {
+        if (ImGui::BeginTabItem("Loft & Resolution")) {
+            renderFuselageLoftTab(fuselage);
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Cross Sections")) {
+            renderFuselageSectionsTab(fuselage);
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Transform")) {
+            renderTransformSection(fuselage);
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+    }
+}
+
+void InspectorPanel::renderFuselageLoftTab(Fuselage& fuselage) {
+    if (editParameterDrag(fuselage.length())) {
+        fuselage.markDirty();
+    }
+
+    bool smoothLoft = fuselage.isSmoothLoft();
+    if (ImGui::Checkbox("Smooth Loft (PCHIP)", &smoothLoft)) {
+        fuselage.setSmoothLoft(smoothLoft);
+    }
+
+    bool capEnds = fuselage.getCapEnds();
+    if (ImGui::Checkbox("Cap Open Ends", &capEnds)) {
+        fuselage.setCapEnds(capEnds);
+    }
+
+    int radialPts = fuselage.getRadialPoints();
+    if (ImGui::SliderInt("Radial Points", &radialPts, 12, 72)) {
+        fuselage.setRadialPoints(radialPts);
+    }
+
+    int axialSub = fuselage.getAxialSubdivisions();
+    if (ImGui::SliderInt("Axial Subdivisions", &axialSub, 1, 24)) {
+        fuselage.setAxialSubdivisions(axialSub);
+    }
+}
+
+void InspectorPanel::renderFuselageSectionsTab(Fuselage& fuselage) {
+    if (fuselage.getSectionCount() == 0) {
+        return;
+    }
+
+    if (ImGui::Button("+ Insert Station")) {
+        fuselage.addSectionAfter(fuselage.getSelectedSection());
+    }
+    ImGui::SameLine();
+    const bool canRemove = fuselage.getSectionCount() > 2;
+    if (!canRemove) {
+        ImGui::BeginDisabled();
+    }
+    if (ImGui::Button("- Remove Station")) {
+        fuselage.removeSection(fuselage.getSelectedSection());
+    }
+    if (!canRemove) {
+        ImGui::EndDisabled();
+    }
+
+    std::size_t selectedIdx = std::min(fuselage.getSelectedSection(), fuselage.getSectionCount() - 1);
+    const char* shapeNames[] = {"Point", "Circle", "Ellipse", "SuperEllipse", "RoundedRect"};
+
+    if (ImGui::BeginListBox("##FuseXSecList", ImVec2(-1.0f, 100.0f))) {
+        for (std::size_t i = 0; i < fuselage.getSectionCount(); ++i) {
+            const FuselageSection& sec = fuselage.getSection(i);
+            const int sIdx = static_cast<int>(sec.getShape());
+            const std::string label =
+                "XSec " + std::to_string(i) +
+                " [" + shapeNames[sIdx] + "]  u=" +
+                std::to_string(sec.stationFrac().getFloat()).substr(0, 4);
+            if (ImGui::Selectable(label.c_str(), i == selectedIdx)) {
+                selectedIdx = i;
+                fuselage.setSelectedSection(i);
+            }
+        }
+        ImGui::EndListBox();
+    }
+
+    FuselageSection& sec = fuselage.getSection(selectedIdx);
+    bool changed = false;
+
+    int shapeIdx = static_cast<int>(sec.getShape());
+    if (ImGui::Combo("Shape", &shapeIdx, shapeNames, 5)) {
+        sec.setShape(static_cast<CrossSectionShape>(shapeIdx));
+        changed = true;
+    }
+
+    changed |= editParameterDrag(sec.stationFrac());
+    if (sec.getShape() != CrossSectionShape::Point) {
+        changed |= editParameterDrag(sec.width());
+        if (sec.getShape() != CrossSectionShape::Circle) {
+            changed |= editParameterDrag(sec.height());
+        }
+    }
+    changed |= editParameterDrag(sec.yOffset());
+    changed |= editParameterDrag(sec.zOffset());
+
+    if (sec.getShape() == CrossSectionShape::SuperEllipse) {
+        changed |= editParameterDrag(sec.superEllipseN());
+    } else if (sec.getShape() == CrossSectionShape::RoundedRect) {
+        changed |= editParameterDrag(sec.cornerRadiusFrac());
+    }
+
+    if (changed) {
+        fuselage.markDirty();
+    }
+
+    ImGui::Spacing();
+    renderFuselageSectionPreview(sec);
+}
+
+void InspectorPanel::renderFuselageSectionPreview(const FuselageSection& section) {
+    const auto loop = section.sampleLoopYZ(48);
+    if (loop.size() < 3) {
+        return;
+    }
+
+    const ImVec2 size(ImGui::GetContentRegionAvail().x, 120.0f);
+    if (size.x < 40.0f) {
+        return;
+    }
+
+    const ImVec2 origin = ImGui::GetCursorScreenPos();
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    drawList->AddRectFilled(origin, ImVec2(origin.x + size.x, origin.y + size.y), IM_COL32(22, 25, 31, 255), 4.0f);
+    drawList->AddRect(origin, ImVec2(origin.x + size.x, origin.y + size.y), IM_COL32(60, 68, 82, 255), 4.0f);
+
+    float maxExtent = 0.5f;
+    for (const glm::vec2& pt : loop) {
+        maxExtent = std::max(maxExtent, std::abs(pt.x - section.yOffset().getFloat()));
+        maxExtent = std::max(maxExtent, std::abs(pt.y - section.zOffset().getFloat()));
+    }
+    const float scale = (std::min(size.x, size.y) * 0.38f) / maxExtent;
+    const float cx = origin.x + size.x * 0.5f;
+    const float cy = origin.y + size.y * 0.5f;
+
+    drawList->AddLine(ImVec2(origin.x + 8.0f, cy), ImVec2(origin.x + size.x - 8.0f, cy), IM_COL32(65, 75, 88, 160), 1.0f);
+    drawList->AddLine(ImVec2(cx, origin.y + 8.0f), ImVec2(cx, origin.y + size.y - 8.0f), IM_COL32(65, 75, 88, 160), 1.0f);
+
+    const float yc = section.yOffset().getFloat();
+    const float zc = section.zOffset().getFloat();
+    const auto toScreen = [&](const glm::vec2& p) -> ImVec2 {
+        return ImVec2(cx + (p.x - yc) * scale, cy - (p.y - zc) * scale);
+    };
+
+    for (std::size_t i = 0; i + 1 < loop.size(); ++i) {
+        drawList->AddLine(toScreen(loop[i]), toScreen(loop[i + 1]), IM_COL32(95, 200, 255, 255), 2.0f);
+    }
+
+    ImGui::Dummy(size);
 }
 
 bool InspectorPanel::renderAirfoilEditor(Airfoil& airfoil) {

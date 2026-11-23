@@ -9,6 +9,7 @@
 #include <glad/gl.h>
 #include <glm/geometric.hpp>
 
+#include "core/Fuselage.hpp"
 #include "core/Wing.hpp"
 
 namespace opads {
@@ -188,6 +189,12 @@ bool Gizmo::getOrigin(const Aircraft& aircraft, glm::vec3& originOut) const noex
                 originOut = glm::vec3(wing->getTransform().getMatrix() * glm::vec4(localLE, 1.0f));
                 return true;
             }
+        } else if (const auto* fuse = dynamic_cast<const Fuselage*>(comp)) {
+            if (fuse->getSectionCount() > 0) {
+                const glm::vec3 localCenter = fuse->getSectionCenterLocal(fuse->getSelectedSection());
+                originOut = glm::vec3(fuse->getTransform().getMatrix() * glm::vec4(localCenter, 1.0f));
+                return true;
+            }
         }
     }
 
@@ -252,6 +259,8 @@ bool Gizmo::beginDrag(const Ray& ray, const Aircraft& aircraft, const OrbitCamer
     if (const auto* wing = dynamic_cast<const Wing*>(comp)) {
         const std::size_t xsec = std::max<std::size_t>(1, wing->getSelectedCrossSection());
         m_dragStartLocalTipLE = wing->getCrossSectionLeadingEdge(xsec);
+    } else if (const auto* fuse = dynamic_cast<const Fuselage*>(comp)) {
+        m_dragStartLocalTipLE = fuse->getSectionCenterLocal(fuse->getSelectedSection());
     }
     return true;
 }
@@ -281,6 +290,10 @@ void Gizmo::updateDrag(const Ray& ray, Aircraft& aircraft) {
                 const glm::vec3 localDelta = glm::vec3(invModel * glm::vec4(axisDir * deltaT, 0.0f));
                 wing->moveCrossSectionLeadingEdge(xsec, m_dragStartLocalTipLE + localDelta);
             }
+        } else if (auto* fuse = dynamic_cast<Fuselage*>(comp)) {
+            const glm::mat4 invModel = glm::inverse(fuse->getTransform().getMatrix());
+            const glm::vec3 localDelta = glm::vec3(invModel * glm::vec4(axisDir * deltaT, 0.0f));
+            fuse->setSectionCenterLocal(fuse->getSelectedSection(), m_dragStartLocalTipLE + localDelta);
         }
     }
 }

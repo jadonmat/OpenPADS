@@ -26,6 +26,7 @@ public:
 
     bool loadFromDatFile(const std::filesystem::path& path);
     bool loadFromDatString(std::string_view contents, std::string fallbackName = "Custom Airfoil");
+    std::string toDatString() const;
     bool saveToDatFile(const std::filesystem::path& path) const;
 
     void setNaca4(std::string_view code);

@@ -11,7 +11,10 @@
 #include "core/Aircraft.hpp"
 #include "core/Airfoil.hpp"
 #include "core/Component.hpp"
+#include "core/Fuselage.hpp"
+#include "core/MeshExporter.hpp"
 #include "core/Parameter.hpp"
+#include "core/ProjectSerializer.hpp"
 #include "core/Transform.hpp"
 #include "core/Wing.hpp"
 #include "render/Gizmo.hpp"
@@ -229,4 +232,78 @@ TEST_CASE("RayPicker hits aircraft wing and selects closest cross-section", "[re
     // Axis projection test
     const opads::Ray axisRay{glm::vec3(3.0f, 0.0f, 5.0f), glm::vec3(0.0f, 0.0f, -1.0f)};
     REQUIRE(opads::Gizmo::projectRayOntoAxis(axisRay, glm::vec3(0.0f), glm::vec3(1.0f, 0.0f, 0.0f)) == Catch::Approx(3.0f).margin(1e-4f));
+}
+
+TEST_CASE("Fuselage builds valid lofted mesh and matches cylinder volume", "[core][fuselage]") {
+    opads::Fuselage fuse(1, "Cylinder Fuse");
+    fuse.clearSections();
+    fuse.length().setValue(10.0);
+    fuse.setSmoothLoft(false);
+    fuse.setCapEnds(true);
+    fuse.setRadialPoints(64);
+    fuse.setAxialSubdivisions(2);
+    fuse.appendSection(opads::FuselageSection(opads::CrossSectionShape::Circle, 0.0, 2.0, 2.0));
+    fuse.appendSection(opads::FuselageSection(opads::CrossSectionShape::Circle, 1.0, 2.0, 2.0));
+    fuse.ensureBuilt();
+
+    // Cylinder R=1.0, L=10.0 -> Volume = pi * 1^2 * 10 = 31.4159, Side+Caps Area = 2*pi*1*10 + 2*pi*1^2 = 69.115
+    REQUIRE(fuse.getVolume() == Catch::Approx(31.4159).margin(0.3));
+    REQUIRE(fuse.getWettedArea() == Catch::Approx(69.115).margin(0.4));
+    REQUIRE(fuse.getFinenessRatio() == Catch::Approx(5.0).margin(1e-4));
+
+    const auto& mesh = fuse.getMesh();
+    REQUIRE_FALSE(mesh.isEmpty());
+    for (const auto& v : mesh.getVertices()) {
+        REQUIRE(glm::length(v.normal) == Catch::Approx(1.0f).margin(1e-3f));
+    }
+}
+
+TEST_CASE("ProjectSerializer round-trips Aircraft and MeshExporter writes STL and OBJ", "[core][io]") {
+    opads::Aircraft original("OpenPADS Jet");
+    const auto wId = original.allocateComponentId();
+    auto wing = std::make_unique<opads::Wing>(wId, "Main Wing");
+    wing->getSection(0).span().setValue(7.5);
+    wing->getSection(0).getTipAirfoil().setNaca5("23012");
+    wing->syncSectionsFromBay(0);
+    wing->getTransform().setPosition({4.0f, 0.0f, 0.2f});
+    wing->ensureBuilt();
+    original.addComponent(std::move(wing));
+
+    const auto fId = original.allocateComponentId();
+    auto fuse = std::make_unique<opads::Fuselage>(fId, "Main Fuselage");
+    fuse->length().setValue(15.0);
+    fuse->markDirty();
+    fuse->ensureBuilt();
+    original.addComponent(std::move(fuse));
+
+    const std::string jsonText = opads::ProjectSerializer::saveToString(original);
+    opads::Aircraft reloaded;
+    REQUIRE(opads::ProjectSerializer::loadFromString(reloaded, jsonText));
+    REQUIRE(reloaded.getName() == "OpenPADS Jet");
+    REQUIRE(reloaded.getComponents().size() == 2);
+
+    const auto* loadedWing = dynamic_cast<const opads::Wing*>(reloaded.getComponents()[0].get());
+    REQUIRE(loadedWing != nullptr);
+    REQUIRE(loadedWing->getSection(0).span().getValue() == Catch::Approx(7.5));
+    REQUIRE(loadedWing->getSection(0).getTipAirfoil().getName() == "NACA 23012");
+    REQUIRE(loadedWing->getTransform().getPosition().x == Catch::Approx(4.0f));
+
+    const auto* loadedFuse = dynamic_cast<const opads::Fuselage*>(reloaded.getComponents()[1].get());
+    REQUIRE(loadedFuse != nullptr);
+    REQUIRE(loadedFuse->length().getValue() == Catch::Approx(15.0));
+
+    // Export binary STL and verify exact byte count = 84 + 50 * totalTriangles
+    std::uint32_t expectedTris = 0;
+    for (const auto& c : reloaded.getComponents()) {
+        expectedTris += static_cast<std::uint32_t>(c->getMesh().getTriangleCount());
+    }
+    const std::filesystem::path tmpStl = std::filesystem::temp_directory_path() / "openpads_export_test.stl";
+    const std::filesystem::path tmpObj = std::filesystem::temp_directory_path() / "openpads_export_test.obj";
+    REQUIRE(opads::MeshExporter::exportBinaryStl(reloaded, tmpStl));
+    REQUIRE(std::filesystem::file_size(tmpStl) == 84 + static_cast<std::uintmax_t>(expectedTris) * 50);
+
+    REQUIRE(opads::MeshExporter::exportObj(reloaded, tmpObj));
+    REQUIRE(std::filesystem::file_size(tmpObj) > 100);
+    std::filesystem::remove(tmpStl);
+    std::filesystem::remove(tmpObj);
 }

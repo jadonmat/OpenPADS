@@ -1,5 +1,6 @@
 #include "core/Component.hpp"
 
+#include <algorithm>
 #include <utility>
 
 namespace opads {
@@ -60,6 +61,20 @@ void Component::ensureBuilt() {
 
 std::vector<std::vector<glm::vec3>> Component::getHighlightLoops() const {
     return {};
+}
+
+std::vector<glm::vec3> Component::getSnapSamplePointsLocal() const {
+    std::vector<glm::vec3> pts;
+    const auto& verts = m_mesh.getVertices();
+    if (verts.empty()) {
+        return pts;
+    }
+    const std::size_t maxSamples = 64;
+    const std::size_t stride = std::max<std::size_t>(1, verts.size() / maxSamples);
+    for (std::size_t i = 0; i < verts.size(); i += stride) {
+        pts.push_back(verts[i].position);
+    }
+    return pts;
 }
 
 } // namespace opads

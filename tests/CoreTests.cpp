@@ -16,7 +16,9 @@
 #include "core/Parameter.hpp"
 #include "core/ProjectSerializer.hpp"
 #include "core/Transform.hpp"
+#include "core/UndoStack.hpp"
 #include "core/Wing.hpp"
+#include "render/GeometrySnap.hpp"
 #include "render/Gizmo.hpp"
 #include "render/OrbitCamera.hpp"
 #include "render/RayPicker.hpp"
@@ -351,4 +353,54 @@ TEST_CASE("RayPicker exclusion and Gizmo CrossSection targeting work for surface
     REQUIRE(origin.x == Catch::Approx(tipLE.x).margin(1e-4f));
     REQUIRE(origin.y == Catch::Approx(tipLE.y).margin(1e-4f));
     REQUIRE(origin.z == Catch::Approx(tipLE.z).margin(1e-4f));
+}
+
+TEST_CASE("GeometrySnap snaps moving wing flush to fuselage surface and UndoStack reverses edits", "[render][snap][undo]") {
+    opads::Aircraft aircraft("Snap & Undo");
+    opads::UndoStack undo;
+
+    const auto fuseId = aircraft.allocateComponentId();
+    auto fuse = std::make_unique<opads::Fuselage>(fuseId, "Fuse");
+    fuse->clearSections();
+    fuse->length().setValue(10.0);
+    fuse->setSmoothLoft(false);
+    fuse->appendSection(opads::FuselageSection(opads::CrossSectionShape::Circle, 0.0, 2.0, 2.0));
+    fuse->appendSection(opads::FuselageSection(opads::CrossSectionShape::Circle, 1.0, 2.0, 2.0));
+    fuse->ensureBuilt();
+    aircraft.addComponent(std::move(fuse));
+
+    const auto wingId = aircraft.allocateComponentId();
+    auto wing = std::make_unique<opads::Wing>(wingId, "Winglet");
+    wing->setSymmetry(opads::SymmetryMode::None);
+    wing->getSection(0).span().setValue(2.0);
+    wing->getSection(0).dihedralDeg().setValue(0.0);
+    wing->getSection(0).sweepDeg().setValue(0.0);
+    wing->syncSectionsFromBay(0);
+    wing->ensureBuilt();
+    opads::Component* wingPtr = aircraft.addComponent(std::move(wing));
+    aircraft.setSelectedComponentId(wingId);
+
+    // Move wing near y=1.18 (just 0.18m outside cylinder surface y=1.0), GeometrySnap along Y should snap flush to y=1.0
+    const opads::SnapResult snap = opads::GeometrySnap::snapPartAlongAxis(
+        *wingPtr,
+        glm::vec3(4.0f, 1.18f, 0.0f),
+        glm::vec3(0.0f, 1.0f, 0.0f),
+        aircraft,
+        0.5f
+    );
+    REQUIRE(snap.snapped);
+    REQUIRE(snap.snappedPosition.y == Catch::Approx(1.0f).margin(0.03f));
+
+    // Undo / Redo verification
+    undo.beginTransaction(aircraft, "Move Wing");
+    wingPtr->getTransform().setPosition(snap.snappedPosition);
+    REQUIRE(undo.commitTransaction(aircraft));
+    REQUIRE(undo.canUndo());
+
+    REQUIRE(undo.undo(aircraft));
+    REQUIRE(aircraft.findComponent(wingId)->getTransform().getPosition().y == Catch::Approx(0.0f).margin(1e-5f));
+    REQUIRE(undo.canRedo());
+
+    REQUIRE(undo.redo(aircraft));
+    REQUIRE(aircraft.findComponent(wingId)->getTransform().getPosition().y == Catch::Approx(snap.snappedPosition.y).margin(1e-4f));
 }

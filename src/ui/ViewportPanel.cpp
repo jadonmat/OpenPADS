@@ -1,6 +1,7 @@
 #include "ui/ViewportPanel.hpp"
 
 #include <cstdint>
+#include <string>
 
 #include <imgui.h>
 
@@ -26,10 +27,11 @@ bool toolbarModeButton(const char* label, bool active) {
 
 } // namespace
 
-ViewportPanel::ViewportPanel(Aircraft& aircraft, Viewport3D& viewport)
+ViewportPanel::ViewportPanel(Aircraft& aircraft, Viewport3D& viewport, UndoStack& undoStack)
     : Panel("3D Viewport")
     , m_aircraft(aircraft)
-    , m_viewport(viewport) {
+    , m_viewport(viewport)
+    , m_undoStack(undoStack) {
 }
 
 void ViewportPanel::onRender() {
@@ -65,16 +67,18 @@ void ViewportPanel::onRender() {
             glm::vec2(rectMin.x, rectMin.y),
             glm::vec2(rectSize.x, rectSize.y)
         );
+        renderOverlayHud(glm::vec2(rectMin.x, rectMin.y), glm::vec2(rectSize.x, rectSize.y));
     }
 
     ImGui::End();
 }
 
 void ViewportPanel::renderToolbar() {
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.0f, 4.0f));
-    ImGui::BeginChild("##ViewportToolbar", ImVec2(0.0f, 34.0f), false, ImGuiWindowFlags_NoScrollbar);
-    ImGui::SetCursorPos(ImVec2(8.0f, 5.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 4.0f));
+    ImGui::BeginChild("##ViewportToolbar", ImVec2(0.0f, 60.0f), false, ImGuiWindowFlags_NoScrollbar);
 
+    // Row 1: Editing tools, Geometry Snap, and Undo/Redo
+    ImGui::SetCursorPos(ImVec2(8.0f, 4.0f));
     Gizmo& gizmo = m_viewport.getGizmo();
     const GizmoTarget target = gizmo.getTarget();
     if (toolbarModeButton("Part", target == GizmoTarget::Part)) {
@@ -108,52 +112,45 @@ void ViewportPanel::renderToolbar() {
 
     ImGui::SameLine();
     bool surfSnap = gizmo.isSurfaceSnapEnabled();
-    if (ImGui::Checkbox("Snap", &surfSnap)) {
+    if (ImGui::Checkbox("Geometry Snap", &surfSnap)) {
         gizmo.setSurfaceSnapEnabled(surfSnap);
     }
     if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Surface Snap: drag center handle or axes onto another part's surface");
+        ImGui::SetTooltip("Snap moving part or XSec flush to neighboring part geometry");
     }
 
     ImGui::SameLine();
     ImGui::TextDisabled("|");
     ImGui::SameLine();
 
+    if (!m_undoStack.canUndo()) ImGui::BeginDisabled();
+    if (ImGui::Button("Undo")) {
+        m_undoStack.undo(m_aircraft);
+    }
+    if (!m_undoStack.canUndo()) ImGui::EndDisabled();
+
+    ImGui::SameLine();
+    if (!m_undoStack.canRedo()) ImGui::BeginDisabled();
+    if (ImGui::Button("Redo")) {
+        m_undoStack.redo(m_aircraft);
+    }
+    if (!m_undoStack.canRedo()) ImGui::EndDisabled();
+
+    // Row 2: Camera presets & Display options
+    ImGui::SetCursorPos(ImVec2(8.0f, 32.0f));
     OrbitCamera& cam = m_viewport.getCamera();
-    if (ImGui::Button("Iso")) {
-        cam.setPresetView(ViewPreset::Isometric);
-    }
+    if (ImGui::Button("Iso")) cam.setPresetView(ViewPreset::Isometric);
     ImGui::SameLine();
-    if (ImGui::Button("Top")) {
-        cam.setPresetView(ViewPreset::Top);
-    }
+    if (ImGui::Button("Top")) cam.setPresetView(ViewPreset::Top);
     ImGui::SameLine();
-    if (ImGui::Button("Front")) {
-        cam.setPresetView(ViewPreset::Front);
-    }
+    if (ImGui::Button("Front")) cam.setPresetView(ViewPreset::Front);
     ImGui::SameLine();
-    if (ImGui::Button("Side")) {
-        cam.setPresetView(ViewPreset::Right);
-    }
+    if (ImGui::Button("Side")) cam.setPresetView(ViewPreset::Right);
     ImGui::SameLine();
-    if (ImGui::Button("Reset")) {
-        cam.reset();
-    }
+    if (ImGui::Button("Reset")) cam.reset();
 
     ImGui::SameLine();
     ImGui::TextDisabled("|");
-    ImGui::SameLine();
-
-    bool showGrid = m_viewport.isGridVisible();
-    if (ImGui::Checkbox("Grid", &showGrid)) {
-        m_viewport.setGridVisible(showGrid);
-    }
-    ImGui::SameLine();
-
-    bool showAxes = m_viewport.isAxesVisible();
-    if (ImGui::Checkbox("Axes", &showAxes)) {
-        m_viewport.setAxesVisible(showAxes);
-    }
     ImGui::SameLine();
 
     const char* modes[] = {"Shaded", "Wireframe", "Shaded + Wire"};
@@ -164,10 +161,54 @@ void ViewportPanel::renderToolbar() {
     }
 
     ImGui::SameLine();
+    bool showGrid = m_viewport.isGridVisible();
+    if (ImGui::Checkbox("Grid", &showGrid)) {
+        m_viewport.setGridVisible(showGrid);
+    }
+    ImGui::SameLine();
+    bool showAxes = m_viewport.isAxesVisible();
+    if (ImGui::Checkbox("Axes", &showAxes)) {
+        m_viewport.setAxesVisible(showAxes);
+    }
+
+    ImGui::SameLine();
     ImGui::TextDisabled("| %.0f FPS", ImGui::GetIO().Framerate);
 
     ImGui::EndChild();
     ImGui::PopStyleVar();
+}
+
+void ViewportPanel::renderOverlayHud(const glm::vec2& imageMin, const glm::vec2& imageSize) {
+    if (imageSize.x < 260.0f || imageSize.y < 100.0f) {
+        return;
+    }
+
+    std::string status = "No selection";
+    const auto selectedId = m_aircraft.getSelectedComponentId();
+    if (selectedId.has_value()) {
+        if (const Component* comp = m_aircraft.findComponent(*selectedId)) {
+            status = comp->getName() + " (" + comp->getTypeName() + ")";
+            if (const auto* wing = dynamic_cast<const Wing*>(comp)) {
+                status += " -> XSec " + std::to_string(wing->getSelectedCrossSection());
+            } else if (const auto* fuse = dynamic_cast<const Fuselage*>(comp)) {
+                status += " -> XSec " + std::to_string(fuse->getSelectedSection());
+            }
+        }
+    }
+
+    const Gizmo& gizmo = m_viewport.getGizmo();
+    const char* targetStr = (gizmo.getTarget() == GizmoTarget::Part) ? "Part" : "XSec";
+    const char* snapStr = gizmo.isSurfaceSnapEnabled() ? " | Snap ON" : "";
+    const std::string hudText = status + "  |  Target: " + targetStr + snapStr +
+        "\nLMB: Pick/Gizmo   RMB: Orbit   MMB: Pan   Ctrl+Z/Y: Undo/Redo";
+
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    const ImVec2 textSize = ImGui::CalcTextSize(hudText.c_str());
+    const ImVec2 boxMin(imageMin.x + 12.0f, imageMin.y + imageSize.y - textSize.y - 22.0f);
+    const ImVec2 boxMax(boxMin.x + textSize.x + 18.0f, boxMin.y + textSize.y + 12.0f);
+    drawList->AddRectFilled(boxMin, boxMax, IM_COL32(18, 21, 27, 195), 5.0f);
+    drawList->AddRect(boxMin, boxMax, IM_COL32(70, 82, 98, 200), 5.0f);
+    drawList->AddText(ImVec2(boxMin.x + 9.0f, boxMin.y + 6.0f), IM_COL32(215, 224, 236, 255), hudText.c_str());
 }
 
 void ViewportPanel::handleViewportInput(bool imageHovered, const glm::vec2& imageMin, const glm::vec2& imageSize) {
@@ -175,7 +216,7 @@ void ViewportPanel::handleViewportInput(bool imageHovered, const glm::vec2& imag
     OrbitCamera& cam = m_viewport.getCamera();
     Gizmo& gizmo = m_viewport.getGizmo();
 
-    if (imageHovered && !io.WantTextInput) {
+    if (imageHovered && !io.WantTextInput && !io.KeyCtrl) {
         if (ImGui::IsKeyPressed(ImGuiKey_Tab)) {
             gizmo.setTarget(
                 gizmo.getTarget() == GizmoTarget::Part ? GizmoTarget::CrossSection : GizmoTarget::Part
@@ -206,6 +247,7 @@ void ViewportPanel::handleViewportInput(bool imageHovered, const glm::vec2& imag
             gizmo.updateDrag(ray, m_aircraft, cam);
         } else {
             gizmo.endDrag();
+            m_undoStack.commitTransaction(m_aircraft);
         }
         return;
     }
@@ -217,7 +259,9 @@ void ViewportPanel::handleViewportInput(bool imageHovered, const glm::vec2& imag
     gizmo.updateHover(ray, m_aircraft, cam);
 
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyAlt) {
-        if (!gizmo.beginDrag(ray, m_aircraft, cam)) {
+        if (gizmo.beginDrag(ray, m_aircraft, cam)) {
+            m_undoStack.beginTransaction(m_aircraft, "3D Gizmo Edit");
+        } else {
             const PickResult pick = RayPicker::pickAircraft(ray, m_aircraft);
             if (pick.hit) {
                 m_aircraft.setSelectedComponentId(pick.componentId);

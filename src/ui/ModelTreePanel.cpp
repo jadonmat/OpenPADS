@@ -5,13 +5,15 @@
 #include <imgui.h>
 
 #include "core/Fuselage.hpp"
+#include "core/ProjectSerializer.hpp"
 #include "core/Wing.hpp"
 
 namespace opads {
 
-ModelTreePanel::ModelTreePanel(Aircraft& aircraft)
+ModelTreePanel::ModelTreePanel(Aircraft& aircraft, UndoStack& undoStack)
     : Panel("Model Tree")
-    , m_aircraft(aircraft) {
+    , m_aircraft(aircraft)
+    , m_undoStack(undoStack) {
 }
 
 void ModelTreePanel::onRender() {
@@ -24,34 +26,35 @@ void ModelTreePanel::onRender() {
         return;
     }
 
-    if (ImGui::Button("+ Add Component")) {
-        ImGui::OpenPopup("AddComponentPopup");
+    if (ImGui::Button("+ Wing")) {
+        const std::string before = ProjectSerializer::saveToString(m_aircraft);
+        const std::uint64_t newId = m_aircraft.allocateComponentId();
+        const std::string wingName = "Wing " + std::to_string(newId);
+        m_aircraft.addComponent(std::make_unique<Wing>(newId, wingName));
+        m_aircraft.setSelectedComponentId(newId);
+        m_undoStack.pushSnapshot(before, m_aircraft, "Add " + wingName);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("+ Fuselage")) {
+        const std::string before = ProjectSerializer::saveToString(m_aircraft);
+        const std::uint64_t newId = m_aircraft.allocateComponentId();
+        const std::string fuseName = "Fuselage " + std::to_string(newId);
+        m_aircraft.addComponent(std::make_unique<Fuselage>(newId, fuseName));
+        m_aircraft.setSelectedComponentId(newId);
+        m_undoStack.pushSnapshot(before, m_aircraft, "Add " + fuseName);
     }
 
     const auto selectedId = m_aircraft.getSelectedComponentId();
     if (selectedId.has_value()) {
         ImGui::SameLine();
         if (ImGui::Button("Delete")) {
-            m_aircraft.removeComponent(*selectedId);
+            const std::string before = ProjectSerializer::saveToString(m_aircraft);
+            const Component* target = m_aircraft.findComponent(*selectedId);
+            const std::string compName = target ? target->getName() : "Component";
+            if (m_aircraft.removeComponent(*selectedId)) {
+                m_undoStack.pushSnapshot(before, m_aircraft, "Delete " + compName);
+            }
         }
-    }
-
-    if (ImGui::BeginPopup("AddComponentPopup")) {
-        ImGui::TextDisabled("Component Types");
-        ImGui::Separator();
-        if (ImGui::MenuItem("Wing")) {
-            const std::uint64_t newId = m_aircraft.allocateComponentId();
-            const std::string wingName = "Wing " + std::to_string(newId);
-            m_aircraft.addComponent(std::make_unique<Wing>(newId, wingName));
-            m_aircraft.setSelectedComponentId(newId);
-        }
-        if (ImGui::MenuItem("Fuselage")) {
-            const std::uint64_t newId = m_aircraft.allocateComponentId();
-            const std::string fuseName = "Fuselage " + std::to_string(newId);
-            m_aircraft.addComponent(std::make_unique<Fuselage>(newId, fuseName));
-            m_aircraft.setSelectedComponentId(newId);
-        }
-        ImGui::EndPopup();
     }
 
     ImGui::Separator();
@@ -70,14 +73,17 @@ void ModelTreePanel::onRender() {
     if (rootOpen) {
         const auto currentSelected = m_aircraft.getSelectedComponentId();
         if (m_aircraft.getComponents().empty()) {
-            ImGui::TextDisabled("No components yet");
+            ImGui::TextDisabled("Empty aircraft. Click + Wing or + Fuselage.");
         } else {
+            std::optional<std::uint64_t> pendingDeleteId;
             for (const auto& component : m_aircraft.getComponents()) {
                 ImGui::PushID(static_cast<int>(component->getId()));
 
                 bool visible = component->isVisible();
                 if (ImGui::Checkbox("##vis", &visible)) {
+                    const std::string before = ProjectSerializer::saveToString(m_aircraft);
                     component->setVisible(visible);
+                    m_undoStack.pushSnapshot(before, m_aircraft, "Toggle Visibility");
                 }
                 ImGui::SameLine();
 
@@ -91,7 +97,7 @@ void ModelTreePanel::onRender() {
                 ImGui::TreeNodeEx(
                     component->getName().c_str(),
                     leafFlags,
-                    "%s [%s]",
+                    "%s  [%s]",
                     component->getName().c_str(),
                     component->getTypeName().c_str()
                 );
@@ -100,7 +106,24 @@ void ModelTreePanel::onRender() {
                     m_aircraft.setSelectedComponentId(component->getId());
                 }
 
+                if (ImGui::BeginPopupContextItem()) {
+                    if (ImGui::MenuItem("Select")) {
+                        m_aircraft.setSelectedComponentId(component->getId());
+                    }
+                    if (ImGui::MenuItem("Delete")) {
+                        pendingDeleteId = component->getId();
+                    }
+                    ImGui::EndPopup();
+                }
+
                 ImGui::PopID();
+            }
+
+            if (pendingDeleteId.has_value()) {
+                const std::string before = ProjectSerializer::saveToString(m_aircraft);
+                if (m_aircraft.removeComponent(*pendingDeleteId)) {
+                    m_undoStack.pushSnapshot(before, m_aircraft, "Delete Component");
+                }
             }
         }
         ImGui::TreePop();

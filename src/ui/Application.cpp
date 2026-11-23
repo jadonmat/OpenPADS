@@ -71,10 +71,10 @@ bool Application::initialize() {
     ImGui_ImplGlfw_InitForOpenGL(m_window, true);
     ImGui_ImplOpenGL3_Init("#version 450");
 
-    m_panels.push_back(std::make_unique<ModelTreePanel>(m_aircraft));
-    m_panels.push_back(std::make_unique<ViewportPanel>(m_aircraft, m_viewport));
-    m_panels.push_back(std::make_unique<AirfoilEditorPanel>(m_aircraft));
-    m_panels.push_back(std::make_unique<InspectorPanel>(m_aircraft));
+    m_panels.push_back(std::make_unique<ModelTreePanel>(m_aircraft, m_undoStack));
+    m_panels.push_back(std::make_unique<ViewportPanel>(m_aircraft, m_viewport, m_undoStack));
+    m_panels.push_back(std::make_unique<AirfoilEditorPanel>(m_aircraft, m_undoStack, m_window));
+    m_panels.push_back(std::make_unique<InspectorPanel>(m_aircraft, m_undoStack, m_window));
 
     return true;
 }
@@ -91,6 +91,7 @@ int Application::run() {
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
+        handleGlobalShortcuts();
         renderDockspace();
         for (const auto& panel : m_panels) {
             panel->onRender();
@@ -225,6 +226,23 @@ void Application::renderMenuBar() {
         ImGui::EndMenu();
     }
 
+    if (ImGui::BeginMenu("Edit")) {
+        const std::string undoText = m_undoStack.canUndo()
+            ? ("Undo " + m_undoStack.getUndoLabel())
+            : std::string("Undo");
+        if (ImGui::MenuItem(undoText.c_str(), "Ctrl+Z", false, m_undoStack.canUndo())) {
+            m_undoStack.undo(m_aircraft);
+        }
+
+        const std::string redoText = m_undoStack.canRedo()
+            ? ("Redo " + m_undoStack.getRedoLabel())
+            : std::string("Redo");
+        if (ImGui::MenuItem(redoText.c_str(), "Ctrl+Y", false, m_undoStack.canRedo())) {
+            m_undoStack.redo(m_aircraft);
+        }
+        ImGui::EndMenu();
+    }
+
     if (ImGui::BeginMenu("View")) {
         for (const auto& panel : m_panels) {
             bool open = panel->isOpen();
@@ -278,9 +296,27 @@ void Application::buildDefaultDockLayout(unsigned int dockspaceId) {
     ImGui::DockBuilderFinish(dockspaceId);
 }
 
+void Application::handleGlobalShortcuts() {
+    ImGuiIO& io = ImGui::GetIO();
+    if (io.WantTextInput || !io.KeyCtrl) {
+        return;
+    }
+
+    if (ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
+        if (io.KeyShift) {
+            m_undoStack.redo(m_aircraft);
+        } else {
+            m_undoStack.undo(m_aircraft);
+        }
+    } else if (ImGui::IsKeyPressed(ImGuiKey_Y, false)) {
+        m_undoStack.redo(m_aircraft);
+    }
+}
+
 void Application::actionNewProject() {
     m_aircraft = Aircraft("Untitled Aircraft");
     m_currentProjectPath.reset();
+    m_undoStack.clear();
 }
 
 void Application::actionOpenProject() {
@@ -294,6 +330,7 @@ void Application::actionOpenProject() {
     }
     if (ProjectSerializer::loadFromFile(m_aircraft, *path)) {
         m_currentProjectPath = *path;
+        m_undoStack.clear();
     }
 }
 

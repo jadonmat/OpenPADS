@@ -44,6 +44,9 @@ public:
     /// Optional local-space 3D polylines highlighted when this component is selected.
     virtual std::vector<std::vector<glm::vec3>> getHighlightLoops() const;
 
+    /// Local-space key geometry/surface sample points used for geometry-based snapping.
+    virtual std::vector<glm::vec3> getSnapSamplePointsLocal() const;
+
     virtual std::string getTypeName() const = 0;
 
 protected:

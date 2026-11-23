@@ -112,6 +112,8 @@ add_library(OpenPADS_Core STATIC
     src/core/ProjectSerializer.cpp
     src/core/MeshExporter.hpp
     src/core/MeshExporter.cpp
+    src/core/UndoStack.hpp
+    src/core/UndoStack.cpp
     src/core/Aircraft.hpp
     src/core/Aircraft.cpp
 )
@@ -127,6 +129,8 @@ add_library(OpenPADS_Render STATIC
     src/render/OrbitCamera.cpp
     src/render/RayPicker.hpp
     src/render/RayPicker.cpp
+    src/render/GeometrySnap.hpp
+    src/render/GeometrySnap.cpp
     src/render/Gizmo.hpp
     src/render/Gizmo.cpp
     src/render/Shader.hpp
@@ -154,6 +158,8 @@ add_library(OpenPADS_UI STATIC
     src/ui/Panel.cpp
     src/ui/FileDialog.hpp
     src/ui/FileDialog.cpp
+    src/ui/AirfoilUiHelper.hpp
+    src/ui/AirfoilUiHelper.cpp
     src/ui/ModelTreePanel.hpp
     src/ui/ModelTreePanel.cpp
     src/ui/InspectorPanel.hpp

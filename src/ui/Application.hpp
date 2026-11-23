@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "core/Aircraft.hpp"
+#include "core/UndoStack.hpp"
 #include "render/Viewport3D.hpp"
 #include "ui/Panel.hpp"
 
@@ -28,6 +29,7 @@ public:
 private:
     void shutdown();
     void applyTheme();
+    void handleGlobalShortcuts();
     void renderDockspace();
     void renderMenuBar();
     void buildDefaultDockLayout(unsigned int dockspaceId);
@@ -39,6 +41,7 @@ private:
 
     GLFWwindow* m_window{nullptr};
     Aircraft m_aircraft;
+    UndoStack m_undoStack;
     Viewport3D m_viewport;
     std::vector<std::unique_ptr<Panel>> m_panels;
     std::optional<std::filesystem::path> m_currentProjectPath;

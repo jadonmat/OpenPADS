@@ -9,7 +9,9 @@
 #include <implot.h>
 
 #include "core/Airfoil.hpp"
+#include "core/ProjectSerializer.hpp"
 #include "core/Wing.hpp"
+#include "ui/AirfoilUiHelper.hpp"
 
 namespace opads {
 
@@ -28,36 +30,17 @@ bool editTextBuffer(const char* label, std::string& value, std::size_t maxLen = 
     return false;
 }
 
-std::filesystem::path resolveAirfoilsDir() {
-    std::error_code ec;
-    const std::array<std::filesystem::path, 5> candidates = {
-        std::filesystem::path("data/airfoils"),
-        std::filesystem::path("../data/airfoils"),
-        std::filesystem::path("../../data/airfoils"),
-        std::filesystem::path("../../../data/airfoils"),
-        std::filesystem::path(OPENPADS_DATA_DIR) / "airfoils"
-    };
-    for (const auto& candidate : candidates) {
-        if (std::filesystem::exists(candidate, ec) && std::filesystem::is_directory(candidate, ec)) {
-            return candidate;
-        }
-    }
-    return {};
-}
-
 double cstClassValue(double x) noexcept {
     return std::sqrt(std::max(x, 0.0)) * std::max(1.0 - x, 0.0);
 }
 
 } // namespace
 
-AirfoilEditorPanel::AirfoilEditorPanel(Aircraft& aircraft)
+AirfoilEditorPanel::AirfoilEditorPanel(Aircraft& aircraft, UndoStack& undoStack, GLFWwindow* window)
     : Panel("Airfoil Editor")
-    , m_aircraft(aircraft) {
-}
-
-void AirfoilEditorPanel::refreshDatLibrary() {
-    m_datLibrary = Airfoil::discoverDatLibrary(resolveAirfoilsDir());
+    , m_aircraft(aircraft)
+    , m_undoStack(undoStack)
+    , m_window(window) {
 }
 
 void AirfoilEditorPanel::onRender() {
@@ -71,8 +54,12 @@ void AirfoilEditorPanel::onRender() {
     }
 
     if (!m_datLibraryScanned) {
-        refreshDatLibrary();
+        AirfoilUiHelper::refreshLibrary(m_datLibrary);
         m_datLibraryScanned = true;
+    }
+
+    if (!m_undoTrackingActive) {
+        m_pendingBeforeJson = ProjectSerializer::saveToString(m_aircraft);
     }
 
     const auto selectedId = m_aircraft.getSelectedComponentId();
@@ -80,7 +67,7 @@ void AirfoilEditorPanel::onRender() {
     auto* wing = dynamic_cast<Wing*>(comp);
 
     if (wing == nullptr || wing->getSectionCount() == 0) {
-        ImGui::TextDisabled("Select a Wing component to inspect and sculpt its cross-section airfoils.");
+        ImGui::TextDisabled("Select a Wing component to inspect, upload, or sculpt its cross-section airfoils.");
         ImGui::End();
         return;
     }
@@ -106,7 +93,7 @@ void AirfoilEditorPanel::onRender() {
 
     ImGui::Separator();
 
-    const float controlsWidth = 280.0f;
+    const float controlsWidth = 300.0f;
     ImGui::BeginChild("##AirfoilControls", ImVec2(controlsWidth, 0.0f), true);
     renderControls(*wing, xsecIndex, airfoil);
     ImGui::EndChild();
@@ -117,143 +104,147 @@ void AirfoilEditorPanel::onRender() {
     renderPlot(*wing, xsecIndex, airfoil);
     ImGui::EndChild();
 
+    const bool anyActive = ImGui::IsAnyItemActive() || ImGui::IsMouseDown(ImGuiMouseButton_Left);
+    if (anyActive) {
+        m_undoTrackingActive = true;
+    } else {
+        m_undoStack.pushSnapshot(m_pendingBeforeJson, m_aircraft, "Edit Airfoil");
+        m_undoTrackingActive = false;
+    }
+
     ImGui::End();
 }
 
 void AirfoilEditorPanel::renderControls(Wing& wing, std::size_t xsecIndex, Airfoil& airfoil) {
     bool changed = false;
 
-    int typeIdx = static_cast<int>(airfoil.getType());
-    const char* types[] = {"NACA 4-Digit", "NACA 5-Digit", "Database / .dat", "CST (Sculpt)"};
-    if (ImGui::Combo("Type", &typeIdx, types, 4)) {
-        if (typeIdx == 0) {
-            airfoil.setNaca4(airfoil.getNaca4Code());
-            changed = true;
-        } else if (typeIdx == 1) {
-            airfoil.setNaca5(airfoil.getNaca5Code());
-            changed = true;
-        } else if (typeIdx == 2 && !m_datLibrary.empty()) {
-            changed |= airfoil.loadFromDatFile(m_datLibrary.front());
-        } else if (typeIdx == 3) {
-            airfoil.convertToCst(4);
-            changed = true;
+    if (ImGui::CollapsingHeader("Airfoil Source", ImGuiTreeNodeFlags_DefaultOpen)) {
+        int typeIdx = static_cast<int>(airfoil.getType());
+        const char* types[] = {"NACA 4-Digit", "NACA 5-Digit", "Database / .dat", "CST (Sculpt)"};
+        if (ImGui::Combo("Type", &typeIdx, types, 4)) {
+            if (typeIdx == 0) {
+                airfoil.setNaca4(airfoil.getNaca4Code());
+                changed = true;
+            } else if (typeIdx == 1) {
+                airfoil.setNaca5(airfoil.getNaca5Code());
+                changed = true;
+            } else if (typeIdx == 2 && !m_datLibrary.empty()) {
+                changed |= airfoil.loadFromDatFile(m_datLibrary.front());
+            } else if (typeIdx == 3) {
+                airfoil.convertToCst(4);
+                changed = true;
+            }
         }
-    }
 
-    if (airfoil.getType() == AirfoilType::Naca4) {
-        std::string code = airfoil.getNaca4Code();
-        if (editTextBuffer("NACA 4", code, 8) && code.size() == 4) {
-            airfoil.setNaca4(code);
-            changed = true;
-        }
-    } else if (airfoil.getType() == AirfoilType::Naca5) {
-        std::string code = airfoil.getNaca5Code();
-        if (editTextBuffer("NACA 5", code, 8) && code.size() == 5) {
-            airfoil.setNaca5(code);
-            changed = true;
-        }
-    } else if (airfoil.getType() == AirfoilType::DatFile) {
-        if (ImGui::Button("Refresh .dat List")) {
-            refreshDatLibrary();
-        }
-        if (!m_datLibrary.empty()) {
-            const std::string currentStem = airfoil.getDatPath().empty()
-                ? std::string("Select .dat...")
-                : std::filesystem::path(airfoil.getDatPath()).stem().string();
-            if (ImGui::BeginCombo("Library", currentStem.c_str())) {
-                for (const auto& path : m_datLibrary) {
-                    const std::string stem = path.stem().string();
-                    if (ImGui::Selectable(stem.c_str(), path.string() == airfoil.getDatPath())) {
-                        changed |= airfoil.loadFromDatFile(path);
+        if (airfoil.getType() == AirfoilType::Naca4) {
+            std::string code = airfoil.getNaca4Code();
+            if (editTextBuffer("NACA 4", code, 8) && code.size() == 4) {
+                airfoil.setNaca4(code);
+                changed = true;
+            }
+        } else if (airfoil.getType() == AirfoilType::Naca5) {
+            std::string code = airfoil.getNaca5Code();
+            if (editTextBuffer("NACA 5", code, 8) && code.size() == 5) {
+                airfoil.setNaca5(code);
+                changed = true;
+            }
+        } else if (airfoil.getType() == AirfoilType::DatFile) {
+            changed |= AirfoilUiHelper::renderSearchableDatCombo("Library", airfoil, m_datLibrary, m_searchFilter);
+        } else {
+            ImGui::TextDisabled("Drag points on the 2D plot to sculpt!");
+            const auto& upW = airfoil.getCstUpperWeights();
+            const auto& loW = airfoil.getCstLowerWeights();
+            if (ImGui::TreeNode("CST Weights")) {
+                for (std::size_t i = 0; i < upW.size(); ++i) {
+                    float w = static_cast<float>(upW[i]);
+                    const std::string lbl = "Upper w" + std::to_string(i);
+                    if (ImGui::DragFloat(lbl.c_str(), &w, 0.005f, -1.0f, 1.0f, "%.4f")) {
+                        airfoil.setCstUpperWeight(i, static_cast<double>(w));
+                        changed = true;
                     }
                 }
-                ImGui::EndCombo();
+                for (std::size_t i = 0; i < loW.size(); ++i) {
+                    float w = static_cast<float>(loW[i]);
+                    const std::string lbl = "Lower w" + std::to_string(i);
+                    if (ImGui::DragFloat(lbl.c_str(), &w, 0.005f, -1.0f, 1.0f, "%.4f")) {
+                        airfoil.setCstLowerWeight(i, static_cast<double>(w));
+                        changed = true;
+                    }
+                }
+                ImGui::TreePop();
             }
         }
-    } else {
-        ImGui::TextDisabled("Drag points on the 2D plot to sculpt!");
-        const auto& upW = airfoil.getCstUpperWeights();
-        const auto& loW = airfoil.getCstLowerWeights();
-        if (ImGui::TreeNode("CST Weights")) {
-            for (std::size_t i = 0; i < upW.size(); ++i) {
-                float w = static_cast<float>(upW[i]);
-                const std::string lbl = "Upper w" + std::to_string(i);
-                if (ImGui::DragFloat(lbl.c_str(), &w, 0.005f, -1.0f, 1.0f, "%.4f")) {
-                    airfoil.setCstUpperWeight(i, static_cast<double>(w));
-                    changed = true;
+
+        if (ImGui::Button("Upload .dat File...")) {
+            changed |= AirfoilUiHelper::uploadDatFile(m_window, airfoil, m_datLibrary, m_statusMessage);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Refresh")) {
+            AirfoilUiHelper::refreshLibrary(m_datLibrary);
+        }
+
+        if (airfoil.getType() != AirfoilType::Cst) {
+            if (ImGui::Button("Convert to Editable CST", ImVec2(-1.0f, 0.0f))) {
+                airfoil.convertToCst(4);
+                changed = true;
+            }
+        }
+    }
+
+    if (ImGui::CollapsingHeader("Shape Modifiers", ImGuiTreeNodeFlags_DefaultOpen)) {
+        float thick = airfoil.getThicknessScale();
+        if (ImGui::DragFloat("Thickness", &thick, 0.01f, 0.1f, 3.0f, "%.2f")) {
+            changed |= airfoil.setThicknessScale(thick);
+        }
+
+        float camber = airfoil.getCamberScale();
+        if (ImGui::DragFloat("Camber", &camber, 0.02f, -2.0f, 2.5f, "%.2f")) {
+            changed |= airfoil.setCamberScale(camber);
+        }
+
+        float teGap = airfoil.getTeGap();
+        if (ImGui::DragFloat("TE Gap", &teGap, 0.0005f, 0.0f, 0.03f, "%.4f")) {
+            changed |= airfoil.setTeGap(teGap);
+        }
+
+        if (airfoil.getType() != AirfoilType::DatFile && airfoil.getType() != AirfoilType::Cst) {
+            bool sharpTE = airfoil.isSharpTE();
+            if (ImGui::Checkbox("Sharp Trailing Edge", &sharpTE)) {
+                changed |= airfoil.setSharpTE(sharpTE);
+            }
+        }
+    }
+
+    if (ImGui::CollapsingHeader("Metrics & Export", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Checkbox("Show Camber Line", &m_showCamber);
+        ImGui::SameLine();
+        ImGui::Checkbox("Chord", &m_showChord);
+
+        ImGui::Text("Name:       %s", airfoil.getName().c_str());
+        ImGui::Text("Max t/c:    %.2f%%", airfoil.getMaxThicknessRatio() * 100.0f);
+        ImGui::Text("Max Camber: %.2f%%", airfoil.getMaxCamberRatio() * 100.0f);
+        ImGui::Text("Loop Pts:   %zu", airfoil.getClosedLoop().size());
+
+        ImGui::Separator();
+        editTextBuffer("Export File", m_exportFilename, 64);
+        if (ImGui::Button("Save .dat to Library", ImVec2(-1.0f, 0.0f))) {
+            const std::filesystem::path dir = AirfoilUiHelper::resolveAirfoilsDir();
+            if (!dir.empty() && !m_exportFilename.empty()) {
+                std::filesystem::path target = dir / m_exportFilename;
+                if (target.extension() != ".dat") {
+                    target.replace_extension(".dat");
+                }
+                if (airfoil.saveToDatFile(target)) {
+                    m_statusMessage = "Saved: " + target.filename().string();
+                    AirfoilUiHelper::refreshLibrary(m_datLibrary);
+                } else {
+                    m_statusMessage = "Failed to save .dat file.";
                 }
             }
-            for (std::size_t i = 0; i < loW.size(); ++i) {
-                float w = static_cast<float>(loW[i]);
-                const std::string lbl = "Lower w" + std::to_string(i);
-                if (ImGui::DragFloat(lbl.c_str(), &w, 0.005f, -1.0f, 1.0f, "%.4f")) {
-                    airfoil.setCstLowerWeight(i, static_cast<double>(w));
-                    changed = true;
-                }
-            }
-            ImGui::TreePop();
         }
-    }
-
-    if (airfoil.getType() != AirfoilType::Cst) {
-        if (ImGui::Button("Convert to Editable CST", ImVec2(-1.0f, 0.0f))) {
-            airfoil.convertToCst(4);
-            changed = true;
+        if (!m_statusMessage.empty()) {
+            ImGui::TextWrapped("%s", m_statusMessage.c_str());
         }
-    }
-
-    ImGui::Separator();
-
-    float thick = airfoil.getThicknessScale();
-    if (ImGui::DragFloat("Thickness", &thick, 0.01f, 0.1f, 3.0f, "%.2f")) {
-        changed |= airfoil.setThicknessScale(thick);
-    }
-
-    float camber = airfoil.getCamberScale();
-    if (ImGui::DragFloat("Camber", &camber, 0.02f, -2.0f, 2.5f, "%.2f")) {
-        changed |= airfoil.setCamberScale(camber);
-    }
-
-    float teGap = airfoil.getTeGap();
-    if (ImGui::DragFloat("TE Gap", &teGap, 0.0005f, 0.0f, 0.03f, "%.4f")) {
-        changed |= airfoil.setTeGap(teGap);
-    }
-
-    if (airfoil.getType() != AirfoilType::DatFile && airfoil.getType() != AirfoilType::Cst) {
-        bool sharpTE = airfoil.isSharpTE();
-        if (ImGui::Checkbox("Sharp Trailing Edge", &sharpTE)) {
-            changed |= airfoil.setSharpTE(sharpTE);
-        }
-    }
-
-    ImGui::Checkbox("Show Camber Line", &m_showCamber);
-    ImGui::Checkbox("Show Chord Line", &m_showChord);
-
-    ImGui::Separator();
-    ImGui::Text("Name:       %s", airfoil.getName().c_str());
-    ImGui::Text("Max t/c:    %.2f%%", airfoil.getMaxThicknessRatio() * 100.0f);
-    ImGui::Text("Max Camber: %.2f%%", airfoil.getMaxCamberRatio() * 100.0f);
-    ImGui::Text("Loop Pts:   %zu", airfoil.getClosedLoop().size());
-
-    ImGui::Separator();
-    editTextBuffer("Export File", m_exportFilename, 64);
-    if (ImGui::Button("Save .dat to Library", ImVec2(-1.0f, 0.0f))) {
-        const std::filesystem::path dir = resolveAirfoilsDir();
-        if (!dir.empty() && !m_exportFilename.empty()) {
-            std::filesystem::path target = dir / m_exportFilename;
-            if (target.extension() != ".dat") {
-                target.replace_extension(".dat");
-            }
-            if (airfoil.saveToDatFile(target)) {
-                m_statusMessage = "Saved: " + target.filename().string();
-                refreshDatLibrary();
-            } else {
-                m_statusMessage = "Failed to save .dat file.";
-            }
-        }
-    }
-    if (!m_statusMessage.empty()) {
-        ImGui::TextWrapped("%s", m_statusMessage.c_str());
     }
 
     if (changed) {

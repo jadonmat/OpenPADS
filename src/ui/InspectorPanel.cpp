@@ -11,7 +11,9 @@
 #include "core/Airfoil.hpp"
 #include "core/Fuselage.hpp"
 #include "core/Parameter.hpp"
+#include "core/ProjectSerializer.hpp"
 #include "core/Wing.hpp"
+#include "ui/AirfoilUiHelper.hpp"
 
 namespace opads {
 
@@ -30,28 +32,13 @@ bool editStringField(const char* label, std::string& value, std::size_t maxLen =
     return false;
 }
 
-std::filesystem::path locateAirfoilLibraryDir() {
-    std::error_code ec;
-    const std::array<std::filesystem::path, 5> candidates = {
-        std::filesystem::path("data/airfoils"),
-        std::filesystem::path("../data/airfoils"),
-        std::filesystem::path("../../data/airfoils"),
-        std::filesystem::path("../../../data/airfoils"),
-        std::filesystem::path(OPENPADS_DATA_DIR) / "airfoils"
-    };
-    for (const auto& candidate : candidates) {
-        if (std::filesystem::exists(candidate, ec) && std::filesystem::is_directory(candidate, ec)) {
-            return candidate;
-        }
-    }
-    return {};
-}
-
 } // namespace
 
-InspectorPanel::InspectorPanel(Aircraft& aircraft)
+InspectorPanel::InspectorPanel(Aircraft& aircraft, UndoStack& undoStack, GLFWwindow* window)
     : Panel("Inspector")
-    , m_aircraft(aircraft) {
+    , m_aircraft(aircraft)
+    , m_undoStack(undoStack)
+    , m_window(window) {
 }
 
 void InspectorPanel::onRender() {
@@ -65,9 +52,15 @@ void InspectorPanel::onRender() {
     }
 
     if (!m_datLibraryScanned) {
-        refreshDatLibrary();
+        AirfoilUiHelper::refreshLibrary(m_datLibrary);
         m_datLibraryScanned = true;
     }
+
+    if (!m_undoTrackingActive) {
+        m_pendingBeforeJson = ProjectSerializer::saveToString(m_aircraft);
+    }
+
+    ImGui::PushItemWidth(-125.0f);
 
     const auto selectedId = m_aircraft.getSelectedComponentId();
     Component* selected = selectedId.has_value() ? m_aircraft.findComponent(*selectedId) : nullptr;
@@ -77,12 +70,17 @@ void InspectorPanel::onRender() {
         renderAircraftProperties();
     }
 
-    ImGui::End();
-}
+    ImGui::PopItemWidth();
 
-void InspectorPanel::refreshDatLibrary() {
-    const std::filesystem::path dir = locateAirfoilLibraryDir();
-    m_datLibrary = Airfoil::discoverDatLibrary(dir);
+    const bool anyActive = ImGui::IsAnyItemActive();
+    if (anyActive) {
+        m_undoTrackingActive = true;
+    } else {
+        m_undoStack.pushSnapshot(m_pendingBeforeJson, m_aircraft, "Edit Properties");
+        m_undoTrackingActive = false;
+    }
+
+    ImGui::End();
 }
 
 bool InspectorPanel::editParameterDrag(Parameter& param) {
@@ -104,7 +102,7 @@ bool InspectorPanel::editParameterDrag(Parameter& param) {
 }
 
 void InspectorPanel::renderAircraftProperties() {
-    ImGui::TextUnformatted("Aircraft Properties");
+    ImGui::TextUnformatted("Aircraft Summary");
     ImGui::Separator();
 
     std::string name = m_aircraft.getName();
@@ -115,10 +113,14 @@ void InspectorPanel::renderAircraftProperties() {
     ImGui::Spacing();
     ImGui::Text("Components: %zu", m_aircraft.getComponents().size());
     ImGui::TextDisabled("Coordinate System: Aerospace Z-Up (X aft, Y stbd, Z up)");
+    ImGui::Spacing();
+    ImGui::TextDisabled("Tip: Use Model Tree (+ Wing / + Fuselage) or click parts in 3D.");
 }
 
 void InspectorPanel::renderComponentProperties(Component& component) {
-    ImGui::Text("%s (%s)", component.getName().c_str(), component.getTypeName().c_str());
+    ImGui::Text("%s", component.getName().c_str());
+    ImGui::SameLine();
+    ImGui::TextDisabled("(%s)", component.getTypeName().c_str());
     ImGui::Separator();
 
     std::string name = component.getName();
@@ -144,13 +146,12 @@ void InspectorPanel::renderComponentProperties(Component& component) {
 }
 
 void InspectorPanel::renderWingEditor(Wing& wing) {
-    // Live aero-geometric summary header
     if (ImGui::BeginTable("##WingMetrics", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchSame)) {
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
         ImGui::Text("Area S:  %.3f m^2", wing.getPlanformArea());
         ImGui::Text("Span b:  %.3f m", wing.getSpan());
-        ImGui::Text("Aspect Ratio: %.2f", wing.getAspectRatio());
+        ImGui::Text("AR:      %.2f", wing.getAspectRatio());
         ImGui::TableSetColumnIndex(1);
         ImGui::Text("MAC:     %.3f m", wing.getMeanAerodynamicChord());
         ImGui::Text("Wetted:  %.3f m^2", wing.getWettedArea());
@@ -160,7 +161,7 @@ void InspectorPanel::renderWingEditor(Wing& wing) {
 
     ImGui::Spacing();
     if (ImGui::BeginTabBar("##WingTabs")) {
-        if (ImGui::BeginTabItem("Planform & Bays")) {
+        if (ImGui::BeginTabItem("Planform")) {
             renderWingPlanformTab(wing);
             ImGui::EndTabItem();
         }
@@ -178,7 +179,7 @@ void InspectorPanel::renderWingEditor(Wing& wing) {
 
 void InspectorPanel::renderWingPlanformTab(Wing& wing) {
     int symIndex = (wing.getSymmetry() == SymmetryMode::XZ) ? 1 : 0;
-    const char* symItems[] = {"None (Single Side)", "XZ Plane (Left + Right)"};
+    const char* symItems[] = {"None (Single Side)", "XZ Mirror (Left + Right)"};
     if (ImGui::Combo("Symmetry", &symIndex, symItems, 2)) {
         wing.setSymmetry(symIndex == 1 ? SymmetryMode::XZ : SymmetryMode::None);
     }
@@ -214,7 +215,7 @@ void InspectorPanel::renderWingPlanformTab(Wing& wing) {
     }
 
     m_selectedBay = std::min(m_selectedBay, wing.getSectionCount() - 1);
-    if (ImGui::BeginListBox("##BayList", ImVec2(-1.0f, 82.0f))) {
+    if (ImGui::BeginListBox("##BayList", ImVec2(-1.0f, 78.0f))) {
         for (std::size_t i = 0; i < wing.getSectionCount(); ++i) {
             const WingSection& sec = wing.getSection(i);
             const std::string label =
@@ -241,7 +242,7 @@ void InspectorPanel::renderWingPlanformTab(Wing& wing) {
     changed |= editParameterDrag(bay.dihedralDeg());
 
     int spanSub = bay.getSpanSubdivisions();
-    if (ImGui::SliderInt("Span Subdivisions", &spanSub, 1, 32)) {
+    if (ImGui::SliderInt("Span Subdiv", &spanSub, 1, 32)) {
         bay.setSpanSubdivisions(spanSub);
         changed = true;
     }
@@ -255,7 +256,19 @@ void InspectorPanel::renderWingCrossSectionsTab(Wing& wing) {
     const std::size_t xsecCount = wing.getCrossSectionCount();
     std::size_t selectedXSec = std::min(wing.getSelectedCrossSection(), xsecCount - 1);
 
-    if (ImGui::BeginListBox("##XSecList", ImVec2(-1.0f, 92.0f))) {
+    if (ImGui::Button("< Prev XSec") && selectedXSec > 0) {
+        --selectedXSec;
+        wing.setSelectedCrossSection(selectedXSec);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Next XSec >") && selectedXSec + 1 < xsecCount) {
+        ++selectedXSec;
+        wing.setSelectedCrossSection(selectedXSec);
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("(%zu / %zu)", selectedXSec, xsecCount - 1);
+
+    if (ImGui::BeginListBox("##XSecList", ImVec2(-1.0f, 82.0f))) {
         for (std::size_t i = 0; i < xsecCount; ++i) {
             const std::string xsecLabel = (i == 0)
                 ? ("XSec 0 (Root) - " + wing.getSection(0).getRootAirfoil().getName())
@@ -318,7 +331,7 @@ void InspectorPanel::renderFuselageEditor(Fuselage& fuselage) {
 
     ImGui::Spacing();
     if (ImGui::BeginTabBar("##FuseTabs")) {
-        if (ImGui::BeginTabItem("Loft & Resolution")) {
+        if (ImGui::BeginTabItem("Loft")) {
             renderFuselageLoftTab(fuselage);
             ImGui::EndTabItem();
         }
@@ -350,12 +363,12 @@ void InspectorPanel::renderFuselageLoftTab(Fuselage& fuselage) {
     }
 
     int radialPts = fuselage.getRadialPoints();
-    if (ImGui::SliderInt("Radial Points", &radialPts, 12, 72)) {
+    if (ImGui::SliderInt("Radial Pts", &radialPts, 12, 72)) {
         fuselage.setRadialPoints(radialPts);
     }
 
     int axialSub = fuselage.getAxialSubdivisions();
-    if (ImGui::SliderInt("Axial Subdivisions", &axialSub, 1, 24)) {
+    if (ImGui::SliderInt("Axial Subdiv", &axialSub, 1, 24)) {
         fuselage.setAxialSubdivisions(axialSub);
     }
 }
@@ -365,25 +378,37 @@ void InspectorPanel::renderFuselageSectionsTab(Fuselage& fuselage) {
         return;
     }
 
-    if (ImGui::Button("+ Insert Station")) {
-        fuselage.addSectionAfter(fuselage.getSelectedSection());
+    std::size_t selectedIdx = std::min(fuselage.getSelectedSection(), fuselage.getSectionCount() - 1);
+    if (ImGui::Button("+ Insert")) {
+        fuselage.addSectionAfter(selectedIdx);
+        selectedIdx = fuselage.getSelectedSection();
     }
     ImGui::SameLine();
     const bool canRemove = fuselage.getSectionCount() > 2;
     if (!canRemove) {
         ImGui::BeginDisabled();
     }
-    if (ImGui::Button("- Remove Station")) {
-        fuselage.removeSection(fuselage.getSelectedSection());
+    if (ImGui::Button("- Remove")) {
+        fuselage.removeSection(selectedIdx);
+        selectedIdx = fuselage.getSelectedSection();
     }
     if (!canRemove) {
         ImGui::EndDisabled();
     }
+    ImGui::SameLine();
+    if (ImGui::Button("<") && selectedIdx > 0) {
+        --selectedIdx;
+        fuselage.setSelectedSection(selectedIdx);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button(">") && selectedIdx + 1 < fuselage.getSectionCount()) {
+        ++selectedIdx;
+        fuselage.setSelectedSection(selectedIdx);
+    }
 
-    std::size_t selectedIdx = std::min(fuselage.getSelectedSection(), fuselage.getSectionCount() - 1);
     const char* shapeNames[] = {"Point", "Circle", "Ellipse", "SuperEllipse", "RoundedRect"};
 
-    if (ImGui::BeginListBox("##FuseXSecList", ImVec2(-1.0f, 100.0f))) {
+    if (ImGui::BeginListBox("##FuseXSecList", ImVec2(-1.0f, 90.0f))) {
         for (std::size_t i = 0; i < fuselage.getSectionCount(); ++i) {
             const FuselageSection& sec = fuselage.getSection(i);
             const int sIdx = static_cast<int>(sec.getShape());
@@ -438,7 +463,7 @@ void InspectorPanel::renderFuselageSectionPreview(const FuselageSection& section
         return;
     }
 
-    const ImVec2 size(ImGui::GetContentRegionAvail().x, 120.0f);
+    const ImVec2 size(ImGui::GetContentRegionAvail().x, 115.0f);
     if (size.x < 40.0f) {
         return;
     }
@@ -477,7 +502,7 @@ bool InspectorPanel::renderAirfoilEditor(Airfoil& airfoil) {
     bool changed = false;
 
     int typeIdx = static_cast<int>(airfoil.getType());
-    const char* types[] = {"NACA 4-Digit", "NACA 5-Digit", "Database / .dat File", "CST (Sculpt)"};
+    const char* types[] = {"NACA 4-Digit", "NACA 5-Digit", "Database / .dat", "CST (Sculpt)"};
     if (ImGui::Combo("Airfoil Type", &typeIdx, types, 4)) {
         if (typeIdx == 0) {
             airfoil.setNaca4(airfoil.getNaca4Code());
@@ -495,50 +520,31 @@ bool InspectorPanel::renderAirfoilEditor(Airfoil& airfoil) {
 
     if (airfoil.getType() == AirfoilType::Naca4) {
         std::string code = airfoil.getNaca4Code();
-        if (editStringField("NACA 4 Code", code, 8)) {
-            if (code.size() == 4) {
-                airfoil.setNaca4(code);
-                changed = true;
-            }
+        if (editStringField("NACA 4 Code", code, 8) && code.size() == 4) {
+            airfoil.setNaca4(code);
+            changed = true;
         }
     } else if (airfoil.getType() == AirfoilType::Naca5) {
         std::string code = airfoil.getNaca5Code();
-        if (editStringField("NACA 5 Code", code, 8)) {
-            if (code.size() == 5) {
-                airfoil.setNaca5(code);
-                changed = true;
-            }
+        if (editStringField("NACA 5 Code", code, 8) && code.size() == 5) {
+            airfoil.setNaca5(code);
+            changed = true;
         }
     } else if (airfoil.getType() == AirfoilType::Cst) {
-        ImGui::TextDisabled("Edit CST points in the Airfoil Editor tab.");
+        ImGui::TextDisabled("Drag CST points in the Airfoil Editor tab.");
     } else {
-        if (ImGui::Button("Refresh Library")) {
-            refreshDatLibrary();
-        }
-        if (m_datLibrary.empty()) {
-            ImGui::TextDisabled("No .dat files found in data/airfoils/");
-        } else {
-            const std::string currentStem = airfoil.getDatPath().empty()
-                ? std::string("Select .dat airfoil...")
-                : std::filesystem::path(airfoil.getDatPath()).stem().string();
-            if (ImGui::BeginCombo("Airfoil Library", currentStem.c_str())) {
-                for (const auto& path : m_datLibrary) {
-                    const std::string stem = path.stem().string();
-                    const bool isSelected = (path.string() == airfoil.getDatPath());
-                    if (ImGui::Selectable(stem.c_str(), isSelected)) {
-                        changed |= airfoil.loadFromDatFile(path);
-                    }
-                }
-                ImGui::EndCombo();
-            }
-        }
+        changed |= AirfoilUiHelper::renderSearchableDatCombo("Library", airfoil, m_datLibrary, m_airfoilSearchFilter);
+    }
 
-        std::string customPath = airfoil.getDatPath();
-        if (editStringField("Custom .dat Path", customPath, 256)) {
-            if (airfoil.loadFromDatFile(customPath)) {
-                changed = true;
-            }
-        }
+    if (ImGui::Button("Upload .dat File...")) {
+        changed |= AirfoilUiHelper::uploadDatFile(m_window, airfoil, m_datLibrary, m_uploadStatus);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Refresh")) {
+        AirfoilUiHelper::refreshLibrary(m_datLibrary);
+    }
+    if (!m_uploadStatus.empty()) {
+        ImGui::TextDisabled("%s", m_uploadStatus.c_str());
     }
 
     float thickScale = airfoil.getThicknessScale();
@@ -556,7 +562,7 @@ bool InspectorPanel::renderAirfoilEditor(Airfoil& airfoil) {
         changed |= airfoil.setTeGap(teGap);
     }
 
-    if (airfoil.getType() != AirfoilType::DatFile) {
+    if (airfoil.getType() != AirfoilType::DatFile && airfoil.getType() != AirfoilType::Cst) {
         bool sharpTE = airfoil.isSharpTE();
         if (ImGui::Checkbox("Sharp Trailing Edge", &sharpTE)) {
             changed |= airfoil.setSharpTE(sharpTE);
@@ -577,7 +583,7 @@ void InspectorPanel::renderAirfoilPreview(const Airfoil& airfoil) {
         return;
     }
 
-    const ImVec2 size(ImGui::GetContentRegionAvail().x, 120.0f);
+    const ImVec2 size(ImGui::GetContentRegionAvail().x, 110.0f);
     if (size.x < 40.0f) {
         return;
     }
@@ -592,7 +598,6 @@ void InspectorPanel::renderAirfoilPreview(const Airfoil& airfoil) {
     const float scale = chordPx;
     const float midY = origin.y + size.y * 0.55f;
 
-    // Chord reference line
     drawList->AddLine(
         ImVec2(origin.x + padX, midY),
         ImVec2(origin.x + padX + chordPx, midY),

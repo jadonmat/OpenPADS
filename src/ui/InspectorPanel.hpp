@@ -2,10 +2,14 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <string>
 #include <vector>
 
 #include "core/Aircraft.hpp"
+#include "core/UndoStack.hpp"
 #include "ui/Panel.hpp"
+
+struct GLFWwindow;
 
 namespace opads {
 
@@ -18,7 +22,7 @@ class Wing;
 /// Unified property editor for Aircraft, Transform, Wing, Fuselage, Cross Sections, and Airfoils.
 class InspectorPanel : public Panel {
 public:
-    explicit InspectorPanel(Aircraft& aircraft);
+    InspectorPanel(Aircraft& aircraft, UndoStack& undoStack, GLFWwindow* window);
 
     void onRender() override;
 
@@ -35,14 +39,21 @@ private:
     void renderTransformSection(Component& component);
     bool renderAirfoilEditor(Airfoil& airfoil);
     void renderAirfoilPreview(const Airfoil& airfoil);
-    void refreshDatLibrary();
 
     static bool editParameterDrag(Parameter& param);
 
     Aircraft& m_aircraft;
+    UndoStack& m_undoStack;
+    GLFWwindow* m_window{nullptr};
+
     std::size_t m_selectedBay{0};
     std::vector<std::filesystem::path> m_datLibrary;
     bool m_datLibraryScanned{false};
+    std::string m_airfoilSearchFilter;
+    std::string m_uploadStatus;
+
+    bool m_undoTrackingActive{false};
+    std::string m_pendingBeforeJson;
 };
 
 } // namespace opads

@@ -6,6 +6,7 @@
 #include <glm/vec3.hpp>
 
 #include "core/Aircraft.hpp"
+#include "render/GeometrySnap.hpp"
 #include "render/OrbitCamera.hpp"
 #include "render/Shader.hpp"
 
@@ -105,6 +106,7 @@ private:
     float m_dragStartTwistDeg{0.0f};
     float m_dragStartFuseWidth{1.0f};
     float m_dragStartFuseHeight{1.0f};
+    SnapResult m_lastSnap;
 };
 
 } // namespace opads

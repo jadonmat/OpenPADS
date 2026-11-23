@@ -441,32 +441,50 @@ void Gizmo::updateDrag(const Ray& ray, Aircraft& aircraft, const OrbitCamera& ca
     }
 
     if (m_mode == GizmoMode::Translate) {
+        m_lastSnap = SnapResult{};
+        const float snapThreshold = std::max(0.25f, m_dragGizmoScale * 0.45f);
+
         if (m_activeAxis == GizmoAxis::Center) {
-            if (m_target == GizmoTarget::Part && m_surfaceSnap) {
-                const PickResult snapPick = RayPicker::pickAircraft(ray, aircraft, comp->getId());
-                if (snapPick.hit) {
-                    comp->getTransform().setPosition(snapPick.worldPos);
-                    return;
-                }
-            }
             glm::vec3 planeHit(0.0f);
             if (intersectRayPlane(ray, m_dragStartOrigin, camera.getForward(), planeHit)) {
                 const glm::vec3 worldDelta = planeHit - m_dragStartPlaneHit;
                 if (m_target == GizmoTarget::Part) {
-                    comp->getTransform().setPosition(m_dragStartCompPos + worldDelta);
+                    const glm::vec3 candidatePos = m_dragStartCompPos + worldDelta;
+                    if (m_surfaceSnap) {
+                        m_lastSnap = GeometrySnap::snapPartFree(*comp, candidatePos, aircraft, snapThreshold);
+                        comp->getTransform().setPosition(m_lastSnap.snappedPosition);
+                    } else {
+                        comp->getTransform().setPosition(candidatePos);
+                    }
                 } else if (auto* wing = dynamic_cast<Wing*>(comp)) {
                     const std::size_t xsec = wing->getSelectedCrossSection();
                     if (xsec == 0) {
-                        comp->getTransform().setPosition(m_dragStartCompPos + worldDelta);
+                        const glm::vec3 candidatePos = m_dragStartCompPos + worldDelta;
+                        if (m_surfaceSnap) {
+                            m_lastSnap = GeometrySnap::snapPartFree(*comp, candidatePos, aircraft, snapThreshold);
+                            comp->getTransform().setPosition(m_lastSnap.snappedPosition);
+                        } else {
+                            comp->getTransform().setPosition(candidatePos);
+                        }
                     } else {
+                        glm::vec3 targetWorld = m_dragStartOrigin + worldDelta;
+                        if (m_surfaceSnap) {
+                            m_lastSnap = GeometrySnap::snapWorldPoint(targetWorld, comp->getId(), aircraft, snapThreshold);
+                            targetWorld = m_lastSnap.snappedPosition;
+                        }
                         const glm::mat4 invModel = glm::inverse(wing->getTransform().getMatrix());
-                        const glm::vec3 localDelta = glm::vec3(invModel * glm::vec4(worldDelta, 0.0f));
-                        wing->moveCrossSectionLeadingEdge(xsec, m_dragStartLocalAnchor + localDelta);
+                        const glm::vec3 localTarget = glm::vec3(invModel * glm::vec4(targetWorld, 1.0f));
+                        wing->moveCrossSectionLeadingEdge(xsec, localTarget);
                     }
                 } else if (auto* fuse = dynamic_cast<Fuselage*>(comp)) {
+                    glm::vec3 targetWorld = m_dragStartOrigin + worldDelta;
+                    if (m_surfaceSnap) {
+                        m_lastSnap = GeometrySnap::snapWorldPoint(targetWorld, comp->getId(), aircraft, snapThreshold);
+                        targetWorld = m_lastSnap.snappedPosition;
+                    }
                     const glm::mat4 invModel = glm::inverse(fuse->getTransform().getMatrix());
-                    const glm::vec3 localDelta = glm::vec3(invModel * glm::vec4(worldDelta, 0.0f));
-                    fuse->setSectionCenterLocal(fuse->getSelectedSection(), m_dragStartLocalAnchor + localDelta);
+                    const glm::vec3 localTarget = glm::vec3(invModel * glm::vec4(targetWorld, 1.0f));
+                    fuse->setSectionCenterLocal(fuse->getSelectedSection(), localTarget);
                 }
             }
             return;
@@ -477,32 +495,42 @@ void Gizmo::updateDrag(const Ray& ray, Aircraft& aircraft, const OrbitCamera& ca
         const glm::vec3 worldDelta = axisDir * deltaT;
 
         if (m_target == GizmoTarget::Part) {
-            glm::vec3 newPos = m_dragStartCompPos + worldDelta;
+            const glm::vec3 candidatePos = m_dragStartCompPos + worldDelta;
             if (m_surfaceSnap) {
-                const float snapThreshold = m_dragGizmoScale * 0.40f;
-                const PickResult fwdPick = RayPicker::pickAircraft(Ray{newPos, axisDir}, aircraft, comp->getId());
-                const PickResult bwdPick = RayPicker::pickAircraft(Ray{newPos, -axisDir}, aircraft, comp->getId());
-                if (fwdPick.hit && fwdPick.distance < snapThreshold &&
-                    (!bwdPick.hit || fwdPick.distance <= bwdPick.distance)) {
-                    newPos = fwdPick.worldPos;
-                } else if (bwdPick.hit && bwdPick.distance < snapThreshold) {
-                    newPos = bwdPick.worldPos;
-                }
+                m_lastSnap = GeometrySnap::snapPartAlongAxis(*comp, candidatePos, axisDir, aircraft, snapThreshold);
+                comp->getTransform().setPosition(m_lastSnap.snappedPosition);
+            } else {
+                comp->getTransform().setPosition(candidatePos);
             }
-            comp->getTransform().setPosition(newPos);
         } else if (auto* wing = dynamic_cast<Wing*>(comp)) {
             const std::size_t xsec = wing->getSelectedCrossSection();
             if (xsec == 0) {
-                comp->getTransform().setPosition(m_dragStartCompPos + worldDelta);
+                const glm::vec3 candidatePos = m_dragStartCompPos + worldDelta;
+                if (m_surfaceSnap) {
+                    m_lastSnap = GeometrySnap::snapPartAlongAxis(*comp, candidatePos, axisDir, aircraft, snapThreshold);
+                    comp->getTransform().setPosition(m_lastSnap.snappedPosition);
+                } else {
+                    comp->getTransform().setPosition(candidatePos);
+                }
             } else {
+                glm::vec3 targetWorld = m_dragStartOrigin + worldDelta;
+                if (m_surfaceSnap) {
+                    m_lastSnap = GeometrySnap::snapWorldPoint(targetWorld, comp->getId(), aircraft, snapThreshold);
+                    targetWorld = m_lastSnap.snappedPosition;
+                }
                 const glm::mat4 invModel = glm::inverse(wing->getTransform().getMatrix());
-                const glm::vec3 localDelta = glm::vec3(invModel * glm::vec4(worldDelta, 0.0f));
-                wing->moveCrossSectionLeadingEdge(xsec, m_dragStartLocalAnchor + localDelta);
+                const glm::vec3 localTarget = glm::vec3(invModel * glm::vec4(targetWorld, 1.0f));
+                wing->moveCrossSectionLeadingEdge(xsec, localTarget);
             }
         } else if (auto* fuse = dynamic_cast<Fuselage*>(comp)) {
+            glm::vec3 targetWorld = m_dragStartOrigin + worldDelta;
+            if (m_surfaceSnap) {
+                m_lastSnap = GeometrySnap::snapWorldPoint(targetWorld, comp->getId(), aircraft, snapThreshold);
+                targetWorld = m_lastSnap.snappedPosition;
+            }
             const glm::mat4 invModel = glm::inverse(fuse->getTransform().getMatrix());
-            const glm::vec3 localDelta = glm::vec3(invModel * glm::vec4(worldDelta, 0.0f));
-            fuse->setSectionCenterLocal(fuse->getSelectedSection(), m_dragStartLocalAnchor + localDelta);
+            const glm::vec3 localTarget = glm::vec3(invModel * glm::vec4(targetWorld, 1.0f));
+            fuse->setSectionCenterLocal(fuse->getSelectedSection(), localTarget);
         }
         return;
     }
@@ -583,6 +611,7 @@ void Gizmo::updateDrag(const Ray& ray, Aircraft& aircraft, const OrbitCamera& ca
 void Gizmo::endDrag() noexcept {
     m_dragging = false;
     m_activeAxis = GizmoAxis::None;
+    m_lastSnap = SnapResult{};
 }
 
 void Gizmo::render(const glm::mat4& viewProj, const Aircraft& aircraft, const OrbitCamera& camera) {
@@ -651,6 +680,12 @@ void Gizmo::render(const glm::mat4& viewProj, const Aircraft& aircraft, const Or
         drawRing(GizmoAxis::X, glm::vec3(0.95f, 0.28f, 0.28f));
         drawRing(GizmoAxis::Y, glm::vec3(0.28f, 0.88f, 0.36f));
         drawRing(GizmoAxis::Z, glm::vec3(0.32f, 0.62f, 1.00f));
+    }
+
+    if (m_dragging && m_lastSnap.snapped) {
+        const glm::vec3 snapCol(0.20f, 0.96f, 0.92f);
+        pushWireCube(verts, m_lastSnap.targetPoint, scale * 0.06f, snapCol);
+        pushLine(verts, m_lastSnap.sourcePoint, m_lastSnap.targetPoint, snapCol);
     }
 
     if (verts.empty()) {

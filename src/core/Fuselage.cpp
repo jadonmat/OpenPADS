@@ -152,6 +152,20 @@ std::vector<std::vector<glm::vec3>> Fuselage::getHighlightLoops() const {
     return {m_stationRings[idx]};
 }
 
+std::vector<glm::vec3> Fuselage::getSnapSamplePointsLocal() const {
+    std::vector<glm::vec3> pts;
+    for (std::size_t i = 0; i < m_sections.size(); ++i) {
+        pts.push_back(getSectionCenterLocal(i));
+    }
+    for (const auto& ring : m_stationRings) {
+        const std::size_t stride = std::max<std::size_t>(1, ring.size() / 8);
+        for (std::size_t k = 0; k < ring.size(); k += stride) {
+            pts.push_back(ring[k]);
+        }
+    }
+    return pts;
+}
+
 Parameter& Fuselage::length() noexcept { return m_length; }
 const Parameter& Fuselage::length() const noexcept { return m_length; }
 

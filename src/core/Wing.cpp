@@ -222,6 +222,32 @@ std::vector<std::vector<glm::vec3>> Wing::getHighlightLoops() const {
     return result;
 }
 
+std::vector<glm::vec3> Wing::getSnapSamplePointsLocal() const {
+    std::vector<glm::vec3> pts;
+    const std::size_t xsecCount = getCrossSectionCount();
+    for (std::size_t i = 0; i < xsecCount; ++i) {
+        const glm::vec3 le = getCrossSectionLeadingEdge(i);
+        const float chord = getCrossSectionChord(i);
+        pts.push_back(le);
+        pts.push_back(le + glm::vec3(chord, 0.0f, 0.0f));
+        pts.push_back(le + glm::vec3(0.25f * chord, 0.0f, 0.0f));
+        if (m_symmetry == SymmetryMode::XZ && std::abs(le.y) > 1e-4f) {
+            pts.emplace_back(le.x, -le.y, le.z);
+            pts.emplace_back(le.x + chord, -le.y, le.z);
+        }
+    }
+    for (const auto& ring : m_crossSectionRings) {
+        const std::size_t stride = std::max<std::size_t>(1, ring.size() / 12);
+        for (std::size_t k = 0; k < ring.size(); k += stride) {
+            pts.push_back(ring[k]);
+            if (m_symmetry == SymmetryMode::XZ && std::abs(ring[k].y) > 1e-4f) {
+                pts.emplace_back(ring[k].x, -ring[k].y, ring[k].z);
+            }
+        }
+    }
+    return pts;
+}
+
 SymmetryMode Wing::getSymmetry() const noexcept {
     return m_symmetry;
 }

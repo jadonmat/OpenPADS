@@ -79,6 +79,15 @@ classDiagram
             +sampleLoopYZ(int radialPoints) vector~vec2~
         }
 
+        class UndoStack {
+            -vector~Entry~ m_undoEntries
+            -vector~Entry~ m_redoEntries
+            +beginTransaction(Aircraft, string) void
+            +commitTransaction(Aircraft) bool
+            +undo(Aircraft&) bool
+            +redo(Aircraft&) bool
+        }
+
         class ProjectSerializer {
             +saveToFile(Aircraft, path) bool
             +loadFromFile(Aircraft&, path) bool
@@ -185,7 +194,13 @@ classDiagram
 
         class RayPicker {
             +intersectTriangle(Ray, vec3, vec3, vec3, float&) bool
-            +pickAircraft(Ray, Aircraft) PickResult
+            +pickAircraft(Ray, Aircraft, optional~uint64~) PickResult
+        }
+
+        class GeometrySnap {
+            +snapPartFree(Component, vec3, Aircraft, float) SnapResult
+            +snapPartAlongAxis(Component, vec3, vec3, Aircraft, float) SnapResult
+            +snapWorldPoint(vec3, uint64, Aircraft, float) SnapResult
         }
 
         class OrbitCamera {
@@ -333,17 +348,20 @@ flowchart TD
 | **Core** | `src/core/FuselageSection.hpp/.cpp` | Parametric fuselage cross-section shapes (`Point`, `Circle`, `Ellipse`, `SuperEllipse`, `RoundedRect`) |
 | **Core** | `src/core/Fuselage.hpp/.cpp` | Multi-station PCHIP lofted fuselage, end caps, volume & fineness metrics |
 | **Core** | `src/core/ProjectSerializer.hpp/.cpp` | Portable JSON save/load (`.opads`) via `nlohmann/json` |
+| **Core** | `src/core/UndoStack.hpp/.cpp` | Snapshot-based Undo/Redo history (`Ctrl+Z` / `Ctrl+Y`) |
 | **Core** | `src/core/MeshExporter.hpp/.cpp` | World-space Binary STL and Wavefront OBJ exporter |
 | **Core** | `src/core/Aircraft.hpp/.cpp` | Root container owning components, IDs, selection, and dirty rebuilds |
 | **Render** | `src/render/OrbitCamera.hpp/.cpp` | Spherical orbit/pan/zoom camera, CAD view presets, and screen-to-ray unprojection |
-| **Render** | `src/render/RayPicker.hpp/.cpp` | Möller–Trumbore 3D picking against component meshes & wing cross-sections |
-| **Render** | `src/render/Gizmo.hpp/.cpp` | 3D Move/Rotate/Scale gizmos for Parts & Cross-Sections + Surface Snapping |
+| **Render** | `src/render/RayPicker.hpp/.cpp` | Möller–Trumbore 3D picking against component meshes & wing/fuselage cross-sections |
+| **Render** | `src/render/GeometrySnap.hpp/.cpp` | Geometry-based mesh-triangle & feature-point snapping between parts |
+| **Render** | `src/render/Gizmo.hpp/.cpp` | 3D Move/Rotate/Scale gizmos for Parts & Cross-Sections + Geometry Snap |
 | **Render** | `src/render/Shader.hpp/.cpp` | RAII OpenGL shader compiler and uniform helpers |
 | **Render** | `src/render/MeshBuffer.hpp/.cpp` | GPU `VAO`/`VBO`/`EBO` buffer lifecycle for `Mesh` |
 | **Render** | `src/render/GridRenderer.hpp/.cpp` | Procedural anti-aliased `Z = 0` grid and origin RGB triad |
 | **Render** | `src/render/Viewport3D.hpp/.cpp` | Offscreen FBO renderer, lighting shader, highlight loop overlay, gizmo, and mesh cache |
 | **UI** | `src/ui/Panel.hpp/.cpp` | Abstract base class for dockable UI panels |
 | **UI** | `src/ui/FileDialog.hpp/.cpp` | Native OS Open/Save/Export file dialogs |
+| **UI** | `src/ui/AirfoilUiHelper.hpp/.cpp` | Searchable airfoil database dropdown & `.dat` upload helper |
 | **UI** | `src/ui/ModelTreePanel.hpp/.cpp` | Hierarchy outliner for adding, removing, and selecting components |
 | **UI** | `src/ui/InspectorPanel.hpp/.cpp` | Unified tabbed editor for Wing bays, Cross Sections, Airfoils & Transform |
 | **UI** | `src/ui/AirfoilEditorPanel.hpp/.cpp` | Interactive `ImPlot` 2D airfoil editor, CST sculpting, and `.dat` export |

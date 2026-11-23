@@ -20,6 +20,7 @@ public:
 
     std::string getTypeName() const override;
     std::vector<std::vector<glm::vec3>> getHighlightLoops() const override;
+    std::vector<glm::vec3> getSnapSamplePointsLocal() const override;
 
     Parameter& length() noexcept;
     const Parameter& length() const noexcept;

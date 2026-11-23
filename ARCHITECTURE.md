@@ -19,6 +19,7 @@ flowchart LR
     UI --> Core
     App --> UI
     Tests --> Core
+    Tests --> Render
 ```
 
 ---
@@ -127,12 +128,29 @@ classDiagram
             -uint32 m_colorTexture
             -OrbitCamera m_camera
             -GridRenderer m_gridRenderer
+            -Gizmo m_gizmo
             -Shader m_surfaceShader
             -Shader m_highlightShader
             -unordered_map~uint64, MeshBuffer~ m_componentBuffers
             +initialize() bool
             +resize(int w, int h) void
             +render(Aircraft& aircraft) void
+        }
+
+        class Gizmo {
+            -GizmoMode m_mode
+            -GizmoAxis m_hoveredAxis
+            -GizmoAxis m_activeAxis
+            -bool m_dragging
+            +updateHover(Ray, Aircraft, OrbitCamera) void
+            +beginDrag(Ray, Aircraft, OrbitCamera) bool
+            +updateDrag(Ray, Aircraft&) void
+            +render(mat4, Aircraft, OrbitCamera) void
+        }
+
+        class RayPicker {
+            +intersectTriangle(Ray, vec3, vec3, vec3, float&) bool
+            +pickAircraft(Ray, Aircraft) PickResult
         }
 
         class OrbitCamera {
@@ -202,6 +220,12 @@ classDiagram
             -Viewport3D& m_viewport
             +onRender() void
         }
+
+        class AirfoilEditorPanel {
+            -Aircraft& m_aircraft
+            -vector~path~ m_datLibrary
+            +onRender() void
+        }
     }
 
     Aircraft *-- "0..*" Component : owns
@@ -219,14 +243,18 @@ classDiagram
     Panel <|-- ModelTreePanel
     Panel <|-- InspectorPanel
     Panel <|-- ViewportPanel
+    Panel <|-- AirfoilEditorPanel
 
     ModelTreePanel --> Aircraft : add/remove/select
     InspectorPanel --> Aircraft : edits Wing/CrossSections/Airfoils
-    ViewportPanel --> Viewport3D : displays FBO & forwards input
-    ViewportPanel --> Aircraft : passes to render
+    AirfoilEditorPanel --> Aircraft : sculpts active XSec Airfoil
+    ViewportPanel --> Viewport3D : displays FBO & drives Gizmo/Orbit
+    ViewportPanel ..> RayPicker : click-to-select 3D picking
+    ViewportPanel --> Aircraft : updates selection & transforms
 
     Viewport3D *-- "1" OrbitCamera : owns
     Viewport3D *-- "1" GridRenderer : owns
+    Viewport3D *-- "1" Gizmo : owns
     Viewport3D *-- "2" Shader : surface & highlight shaders
     Viewport3D *-- "0..*" MeshBuffer : caches by component ID
     Viewport3D ..> Aircraft : reads dirty state, meshes & highlight loops
@@ -258,20 +286,23 @@ flowchart TD
 | **Core** | `src/core/Transform.hpp/.cpp` | Aerospace Z-up position, Euler rotation, scale, and model matrix |
 | **Core** | `src/core/Parameter.hpp/.cpp` | Bounded engineering parameter with units, clamping, and change tracking |
 | **Core** | `src/core/Mesh.hpp/.cpp` | Indexed triangle mesh (`Vertex` positions + normals) |
-| **Core** | `src/core/Airfoil.hpp/.cpp` | NACA 4/5-digit generators, Selig/Lednicer `.dat` parser, and modifiers |
+| **Core** | `src/core/Airfoil.hpp/.cpp` | NACA 4/5-digit, Selig/Lednicer `.dat`, Kulfan CST sculpting & `.dat` export |
 | **Core** | `src/core/Component.hpp/.cpp` | Abstract base class for aircraft components (`Wing`, `Fuselage`, etc.) |
 | **Core** | `src/core/WingSection.hpp/.cpp` | Spanwise trapezoidal bay with chained root/tip airfoils & aero formulas |
 | **Core** | `src/core/Wing.hpp/.cpp` | Multi-section lofted wing mesh, `XZ` symmetry, tip caps, and highlight rings |
 | **Core** | `src/core/Aircraft.hpp/.cpp` | Root container owning components, IDs, selection, and dirty rebuilds |
-| **Render** | `src/render/OrbitCamera.hpp/.cpp` | Spherical orbit/pan/zoom camera and CAD view presets |
+| **Render** | `src/render/OrbitCamera.hpp/.cpp` | Spherical orbit/pan/zoom camera, CAD view presets, and screen-to-ray unprojection |
+| **Render** | `src/render/RayPicker.hpp/.cpp` | Möller–Trumbore 3D picking against component meshes & wing cross-sections |
+| **Render** | `src/render/Gizmo.hpp/.cpp` | 3D X/Y/Z axis manipulation gizmo for component move & cross-section dragging |
 | **Render** | `src/render/Shader.hpp/.cpp` | RAII OpenGL shader compiler and uniform helpers |
 | **Render** | `src/render/MeshBuffer.hpp/.cpp` | GPU `VAO`/`VBO`/`EBO` buffer lifecycle for `Mesh` |
 | **Render** | `src/render/GridRenderer.hpp/.cpp` | Procedural anti-aliased `Z = 0` grid and origin RGB triad |
-| **Render** | `src/render/Viewport3D.hpp/.cpp` | Offscreen FBO renderer, lighting shader, highlight loop overlay, and mesh cache |
+| **Render** | `src/render/Viewport3D.hpp/.cpp` | Offscreen FBO renderer, lighting shader, highlight loop overlay, gizmo, and mesh cache |
 | **UI** | `src/ui/Panel.hpp/.cpp` | Abstract base class for dockable UI panels |
 | **UI** | `src/ui/ModelTreePanel.hpp/.cpp` | Hierarchy outliner for adding, removing, and selecting components |
 | **UI** | `src/ui/InspectorPanel.hpp/.cpp` | Unified tabbed editor for Wing bays, Cross Sections, Airfoils & Transform |
-| **UI** | `src/ui/ViewportPanel.hpp/.cpp` | Hosts `Viewport3D` image, view toolbar, and mouse camera controls |
+| **UI** | `src/ui/AirfoilEditorPanel.hpp/.cpp` | Interactive `ImPlot` 2D airfoil editor, CST sculpting, and `.dat` export |
+| **UI** | `src/ui/ViewportPanel.hpp/.cpp` | Hosts `Viewport3D` image, picking, gizmo mode toolbar, and camera controls |
 | **UI** | `src/ui/Application.hpp/.cpp` | Window, OpenGL context, Dear ImGui dockspace, theme, and main loop |
 | **Data** | `data/airfoils/*.dat` | Starter UIUC airfoil coordinate library (`clarky`, `sc20412`, `s1223`, etc.) |
 | **App** | `src/main.cpp` | Program entry point |

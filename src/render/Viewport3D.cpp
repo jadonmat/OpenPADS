@@ -124,6 +124,9 @@ bool Viewport3D::initialize() {
     if (!m_gridRenderer.initialize()) {
         return false;
     }
+    if (!m_gizmo.initialize()) {
+        return false;
+    }
     if (!m_surfaceShader.compileFromSource(kSurfaceVertexShader, kSurfaceFragmentShader)) {
         return false;
     }
@@ -261,6 +264,7 @@ void Viewport3D::render(Aircraft& aircraft) {
     }
 
     m_gridRenderer.render(viewProj, camPos, m_camera.getTarget(), m_showGrid, m_showAxes);
+    m_gizmo.render(viewProj, aircraft, m_camera);
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
@@ -318,6 +322,14 @@ OrbitCamera& Viewport3D::getCamera() noexcept {
 
 const OrbitCamera& Viewport3D::getCamera() const noexcept {
     return m_camera;
+}
+
+Gizmo& Viewport3D::getGizmo() noexcept {
+    return m_gizmo;
+}
+
+const Gizmo& Viewport3D::getGizmo() const noexcept {
+    return m_gizmo;
 }
 
 RenderMode Viewport3D::getRenderMode() const noexcept {

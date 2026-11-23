@@ -1,9 +1,12 @@
 #include <cmath>
 #include <filesystem>
+#include <fstream>
+#include <sstream>
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <glm/geometric.hpp>
+#include <glm/trigonometric.hpp>
 
 #include "core/Aircraft.hpp"
 #include "core/Airfoil.hpp"
@@ -11,6 +14,9 @@
 #include "core/Parameter.hpp"
 #include "core/Transform.hpp"
 #include "core/Wing.hpp"
+#include "render/Gizmo.hpp"
+#include "render/OrbitCamera.hpp"
+#include "render/RayPicker.hpp"
 
 namespace {
 
@@ -136,6 +142,7 @@ TEST_CASE("Wing computes exact trapezoidal aero metrics and valid symmetric mesh
     bay.dihedralDeg().setValue(0.0);
     bay.sweepDeg().setValue(15.0);
     wing.setSymmetry(opads::SymmetryMode::XZ);
+    wing.syncSectionsFromBay(0);
     wing.ensureBuilt();
 
     // S = 2 * 0.5 * 5 * (2 + 1) = 15.0 m^2; b = 10.0 m; AR = 100 / 15 = 6.6667
@@ -169,4 +176,57 @@ TEST_CASE("Wing computes exact trapezoidal aero metrics and valid symmetric mesh
     REQUIRE(wing.getSection(1).rootChord().getValue() == Catch::Approx(1.0));
     wing.ensureBuilt();
     REQUIRE(wing.getHighlightLoops().size() == 2);
+}
+
+TEST_CASE("Airfoil CST conversion fits NACA 2412 and round-trips .dat export", "[core][airfoil][cst]") {
+    auto foil = opads::Airfoil::createNaca4("2412", 41);
+    const float origThick = foil.getMaxThicknessRatio();
+    const float origCamber = foil.getMaxCamberRatio();
+
+    foil.convertToCst(4);
+    REQUIRE(foil.getType() == opads::AirfoilType::Cst);
+    REQUIRE(foil.getCstUpperWeights().size() == 5);
+    REQUIRE(foil.getMaxThicknessRatio() == Catch::Approx(origThick).margin(0.004f));
+    REQUIRE(foil.getMaxCamberRatio() == Catch::Approx(origCamber).margin(0.003f));
+
+    const std::filesystem::path tmpDat = std::filesystem::temp_directory_path() / "openpads_cst_test.dat";
+    REQUIRE(foil.saveToDatFile(tmpDat));
+
+    opads::Airfoil reloaded;
+    REQUIRE(reloaded.loadFromDatFile(tmpDat));
+    REQUIRE(reloaded.getMaxThicknessRatio() == Catch::Approx(origThick).margin(0.005f));
+    std::filesystem::remove(tmpDat);
+}
+
+TEST_CASE("Wing moveCrossSectionLeadingEdge updates span, sweep, and dihedral", "[core][wing]") {
+    opads::Wing wing(1, "Handle Test Wing");
+    wing.moveCrossSectionLeadingEdge(1, glm::vec3(1.5f, 4.0f, 1.0f));
+    const auto& bay = wing.getSection(0);
+    const float expectedSpan = std::sqrt(4.0f * 4.0f + 1.0f * 1.0f);
+    REQUIRE(bay.span().getFloat() == Catch::Approx(expectedSpan).margin(1e-4f));
+    REQUIRE(bay.dihedralDeg().getFloat() == Catch::Approx(glm::degrees(std::atan2(1.0f, 4.0f))).margin(1e-3f));
+}
+
+TEST_CASE("RayPicker hits aircraft wing and selects closest cross-section", "[render][picking]") {
+    opads::Aircraft aircraft("Pick Test");
+    const auto id = aircraft.allocateComponentId();
+    auto wingPtr = std::make_unique<opads::Wing>(id, "Pick Wing");
+    wingPtr->getSection(0).span().setValue(6.0);
+    wingPtr->getSection(0).dihedralDeg().setValue(0.0);
+    wingPtr->getSection(0).sweepDeg().setValue(0.0);
+    wingPtr->syncSectionsFromBay(0);
+    wingPtr->ensureBuilt();
+    aircraft.addComponent(std::move(wingPtr));
+
+    // Ray aimed downward near the right wing tip (y = 5.5, x = 1.0, z = 10.0 -> -Z)
+    const opads::Ray tipRay{glm::vec3(1.0f, 5.5f, 10.0f), glm::vec3(0.0f, 0.0f, -1.0f)};
+    const opads::PickResult pick = opads::RayPicker::pickAircraft(tipRay, aircraft);
+    REQUIRE(pick.hit);
+    REQUIRE(pick.componentId == id);
+    REQUIRE(pick.crossSectionIndex.has_value());
+    REQUIRE(*pick.crossSectionIndex == 1);
+
+    // Axis projection test
+    const opads::Ray axisRay{glm::vec3(3.0f, 0.0f, 5.0f), glm::vec3(0.0f, 0.0f, -1.0f)};
+    REQUIRE(opads::Gizmo::projectRayOntoAxis(axisRay, glm::vec3(0.0f), glm::vec3(1.0f, 0.0f, 0.0f)) == Catch::Approx(3.0f).margin(1e-4f));
 }

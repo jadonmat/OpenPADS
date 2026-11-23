@@ -302,16 +302,19 @@ bool InspectorPanel::renderAirfoilEditor(Airfoil& airfoil) {
     bool changed = false;
 
     int typeIdx = static_cast<int>(airfoil.getType());
-    const char* types[] = {"NACA 4-Digit", "NACA 5-Digit", "Database / .dat File"};
-    if (ImGui::Combo("Airfoil Type", &typeIdx, types, 3)) {
+    const char* types[] = {"NACA 4-Digit", "NACA 5-Digit", "Database / .dat File", "CST (Sculpt)"};
+    if (ImGui::Combo("Airfoil Type", &typeIdx, types, 4)) {
         if (typeIdx == 0) {
             airfoil.setNaca4(airfoil.getNaca4Code());
             changed = true;
         } else if (typeIdx == 1) {
             airfoil.setNaca5(airfoil.getNaca5Code());
             changed = true;
-        } else if (!m_datLibrary.empty()) {
+        } else if (typeIdx == 2 && !m_datLibrary.empty()) {
             changed |= airfoil.loadFromDatFile(m_datLibrary.front());
+        } else if (typeIdx == 3) {
+            airfoil.convertToCst(4);
+            changed = true;
         }
     }
 
@@ -331,6 +334,8 @@ bool InspectorPanel::renderAirfoilEditor(Airfoil& airfoil) {
                 changed = true;
             }
         }
+    } else if (airfoil.getType() == AirfoilType::Cst) {
+        ImGui::TextDisabled("Edit CST points in the Airfoil Editor tab.");
     } else {
         if (ImGui::Button("Refresh Library")) {
             refreshDatLibrary();

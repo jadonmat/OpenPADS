@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cmath>
 #include <fstream>
+#include <iomanip>
 #include <limits>
 #include <numbers>
 #include <sstream>
@@ -131,6 +132,96 @@ std::vector<glm::vec2> normalizeCurveLEToTE(std::vector<glm::vec2> pts) {
         }
     }
     return pts;
+}
+
+double binomialCoeff(int n, int k) noexcept {
+    if (k < 0 || k > n) {
+        return 0.0;
+    }
+    double res = 1.0;
+    for (int i = 1; i <= k; ++i) {
+        res *= static_cast<double>(n - k + i) / static_cast<double>(i);
+    }
+    return res;
+}
+
+double cstBasis(int n, int i, double x) noexcept {
+    const double cx = std::sqrt(std::max(x, 0.0)) * std::max(1.0 - x, 0.0);
+    const double bernstein = binomialCoeff(n, i) * std::pow(x, i) * std::pow(1.0 - x, n - i);
+    return cx * bernstein;
+}
+
+std::vector<double> fitCstWeights(const std::vector<glm::vec2>& surface, int order) {
+    const int numWeights = order + 1;
+    std::vector<std::vector<double>> ata(
+        static_cast<std::size_t>(numWeights),
+        std::vector<double>(static_cast<std::size_t>(numWeights), 0.0)
+    );
+    std::vector<double> atb(static_cast<std::size_t>(numWeights), 0.0);
+
+    for (const glm::vec2& pt : surface) {
+        const double x = static_cast<double>(pt.x);
+        if (x <= 1e-4 || x >= 1.0 - 1e-4) {
+            continue;
+        }
+        std::vector<double> row(static_cast<std::size_t>(numWeights));
+        for (int i = 0; i < numWeights; ++i) {
+            row[static_cast<std::size_t>(i)] = cstBasis(order, i, x);
+        }
+        const double y = static_cast<double>(pt.y);
+        for (int r = 0; r < numWeights; ++r) {
+            atb[static_cast<std::size_t>(r)] += row[static_cast<std::size_t>(r)] * y;
+            for (int c = 0; c < numWeights; ++c) {
+                ata[static_cast<std::size_t>(r)][static_cast<std::size_t>(c)] +=
+                    row[static_cast<std::size_t>(r)] * row[static_cast<std::size_t>(c)];
+            }
+        }
+    }
+
+    for (int i = 0; i < numWeights; ++i) {
+        ata[static_cast<std::size_t>(i)][static_cast<std::size_t>(i)] += 1e-8;
+    }
+
+    // Partial-pivoting Gaussian elimination
+    for (int col = 0; col < numWeights; ++col) {
+        int pivot = col;
+        double maxAbs = std::abs(ata[static_cast<std::size_t>(col)][static_cast<std::size_t>(col)]);
+        for (int r = col + 1; r < numWeights; ++r) {
+            const double val = std::abs(ata[static_cast<std::size_t>(r)][static_cast<std::size_t>(col)]);
+            if (val > maxAbs) {
+                maxAbs = val;
+                pivot = r;
+            }
+        }
+        if (pivot != col) {
+            std::swap(ata[static_cast<std::size_t>(col)], ata[static_cast<std::size_t>(pivot)]);
+            std::swap(atb[static_cast<std::size_t>(col)], atb[static_cast<std::size_t>(pivot)]);
+        }
+
+        const double diag = ata[static_cast<std::size_t>(col)][static_cast<std::size_t>(col)];
+        if (std::abs(diag) < 1e-14) {
+            continue;
+        }
+        for (int r = col + 1; r < numWeights; ++r) {
+            const double factor = ata[static_cast<std::size_t>(r)][static_cast<std::size_t>(col)] / diag;
+            for (int c = col; c < numWeights; ++c) {
+                ata[static_cast<std::size_t>(r)][static_cast<std::size_t>(c)] -=
+                    factor * ata[static_cast<std::size_t>(col)][static_cast<std::size_t>(c)];
+            }
+            atb[static_cast<std::size_t>(r)] -= factor * atb[static_cast<std::size_t>(col)];
+        }
+    }
+
+    std::vector<double> weights(static_cast<std::size_t>(numWeights), 0.0);
+    for (int r = numWeights - 1; r >= 0; --r) {
+        double sum = atb[static_cast<std::size_t>(r)];
+        for (int c = r + 1; c < numWeights; ++c) {
+            sum -= ata[static_cast<std::size_t>(r)][static_cast<std::size_t>(c)] * weights[static_cast<std::size_t>(c)];
+        }
+        const double diag = ata[static_cast<std::size_t>(r)][static_cast<std::size_t>(r)];
+        weights[static_cast<std::size_t>(r)] = (std::abs(diag) > 1e-14) ? (sum / diag) : 0.0;
+    }
+    return weights;
 }
 
 } // namespace
@@ -347,6 +438,75 @@ bool Airfoil::loadFromDatString(std::string_view contents, std::string fallbackN
     return true;
 }
 
+bool Airfoil::saveToDatFile(const std::filesystem::path& path) const {
+    if (m_loop.empty()) {
+        return false;
+    }
+    std::ofstream out(path);
+    if (!out.is_open()) {
+        return false;
+    }
+    out << m_name << '\n';
+    out << std::fixed << std::setprecision(6);
+    for (const glm::vec2& pt : m_loop) {
+        out << std::setw(10) << pt.x << "  " << std::setw(10) << pt.y << '\n';
+    }
+    return out.good();
+}
+
+void Airfoil::setCst(std::vector<double> upperWeights, std::vector<double> lowerWeights, std::string name) {
+    if (upperWeights.size() >= 2 && upperWeights.size() == lowerWeights.size()) {
+        m_cstUpper = std::move(upperWeights);
+        m_cstLower = std::move(lowerWeights);
+    }
+    m_type = AirfoilType::Cst;
+    m_name = std::move(name);
+    m_datPath.clear();
+    rebuild();
+}
+
+void Airfoil::convertToCst(int order) {
+    const int clampedOrder = std::clamp(order, 2, 8);
+    m_cstUpper = fitCstWeights(m_upper, clampedOrder);
+    m_cstLower = fitCstWeights(m_lower, clampedOrder);
+    m_thicknessScale = 1.0f;
+    m_camberScale = 1.0f;
+    m_type = AirfoilType::Cst;
+    if (m_name.find("(CST)") == std::string::npos) {
+        m_name += " (CST)";
+    }
+    m_datPath.clear();
+    rebuild();
+}
+
+const std::vector<double>& Airfoil::getCstUpperWeights() const noexcept {
+    return m_cstUpper;
+}
+
+const std::vector<double>& Airfoil::getCstLowerWeights() const noexcept {
+    return m_cstLower;
+}
+
+void Airfoil::setCstUpperWeight(std::size_t index, double value) {
+    if (index >= m_cstUpper.size()) {
+        return;
+    }
+    m_cstUpper[index] = std::clamp(value, -1.5, 1.5);
+    if (m_type == AirfoilType::Cst) {
+        rebuild();
+    }
+}
+
+void Airfoil::setCstLowerWeight(std::size_t index, double value) {
+    if (index >= m_cstLower.size()) {
+        return;
+    }
+    m_cstLower[index] = std::clamp(value, -1.5, 1.5);
+    if (m_type == AirfoilType::Cst) {
+        rebuild();
+    }
+}
+
 AirfoilType Airfoil::getType() const noexcept {
     return m_type;
 }
@@ -492,6 +652,9 @@ void Airfoil::rebuild() {
     case AirfoilType::DatFile:
         resampleFromRawDat();
         break;
+    case AirfoilType::Cst:
+        generateCst();
+        break;
     }
     buildLoopAndMetrics();
 }
@@ -595,6 +758,37 @@ void Airfoil::generateNaca5() {
         m_camber[i] = glm::vec2(x, yc);
         m_upper[i] = glm::vec2(std::clamp(x - yt * sinT, 0.0f, 1.0f), yc + yt * cosT);
         m_lower[i] = glm::vec2(std::clamp(x + yt * sinT, 0.0f, 1.0f), yc - yt * cosT);
+    }
+}
+
+void Airfoil::generateCst() {
+    const std::vector<float> xs = makeCosineGrid(m_pointsPerSurface);
+    m_upper.resize(xs.size());
+    m_lower.resize(xs.size());
+    m_camber.resize(xs.size());
+
+    const int order = static_cast<int>(m_cstUpper.size()) - 1;
+    if (order < 1 || m_cstUpper.size() != m_cstLower.size()) {
+        generateNaca4();
+        return;
+    }
+
+    for (std::size_t i = 0; i < xs.size(); ++i) {
+        const double x = static_cast<double>(xs[i]);
+        double yUpBase = 0.0;
+        double yLoBase = 0.0;
+        for (int w = 0; w <= order; ++w) {
+            const double basis = cstBasis(order, w, x);
+            yUpBase += m_cstUpper[static_cast<std::size_t>(w)] * basis;
+            yLoBase += m_cstLower[static_cast<std::size_t>(w)] * basis;
+        }
+
+        const float yc = 0.5f * static_cast<float>(yUpBase + yLoBase) * m_camberScale;
+        const float yt = 0.5f * static_cast<float>(yUpBase - yLoBase) * m_thicknessScale + 0.5f * m_teGap * xs[i];
+
+        m_camber[i] = glm::vec2(xs[i], yc);
+        m_upper[i] = glm::vec2(xs[i], yc + yt);
+        m_lower[i] = glm::vec2(xs[i], yc - yt);
     }
 }
 

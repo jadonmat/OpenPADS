@@ -4,7 +4,26 @@
 
 #include <imgui.h>
 
+#include "core/Wing.hpp"
+#include "render/RayPicker.hpp"
+
 namespace opads {
+
+namespace {
+
+bool toolbarModeButton(const char* label, bool active) {
+    if (active) {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.28f, 0.48f, 0.72f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.34f, 0.56f, 0.82f, 1.0f));
+    }
+    const bool clicked = ImGui::Button(label);
+    if (active) {
+        ImGui::PopStyleColor(2);
+    }
+    return clicked;
+}
+
+} // namespace
 
 ViewportPanel::ViewportPanel(Aircraft& aircraft, Viewport3D& viewport)
     : Panel("3D Viewport")
@@ -38,7 +57,13 @@ void ViewportPanel::onRender() {
         const auto texId = static_cast<ImTextureID>(static_cast<std::uintptr_t>(m_viewport.getColorTextureId()));
         ImGui::Image(texId, avail, ImVec2(0.0f, 1.0f), ImVec2(1.0f, 0.0f));
 
-        handleCameraInput(ImGui::IsItemHovered());
+        const ImVec2 rectMin = ImGui::GetItemRectMin();
+        const ImVec2 rectSize = ImGui::GetItemRectSize();
+        handleViewportInput(
+            ImGui::IsItemHovered(),
+            glm::vec2(rectMin.x, rectMin.y),
+            glm::vec2(rectSize.x, rectSize.y)
+        );
     }
 
     ImGui::End();
@@ -48,6 +73,24 @@ void ViewportPanel::renderToolbar() {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.0f, 4.0f));
     ImGui::BeginChild("##ViewportToolbar", ImVec2(0.0f, 34.0f), false, ImGuiWindowFlags_NoScrollbar);
     ImGui::SetCursorPos(ImVec2(8.0f, 5.0f));
+
+    Gizmo& gizmo = m_viewport.getGizmo();
+    const GizmoMode mode = gizmo.getMode();
+    if (toolbarModeButton("Select (Q)", mode == GizmoMode::Select)) {
+        gizmo.setMode(GizmoMode::Select);
+    }
+    ImGui::SameLine();
+    if (toolbarModeButton("Move (W)", mode == GizmoMode::Translate)) {
+        gizmo.setMode(GizmoMode::Translate);
+    }
+    ImGui::SameLine();
+    if (toolbarModeButton("XSec (E)", mode == GizmoMode::SectionHandle)) {
+        gizmo.setMode(GizmoMode::SectionHandle);
+    }
+
+    ImGui::SameLine();
+    ImGui::TextDisabled("|");
+    ImGui::SameLine();
 
     OrbitCamera& cam = m_viewport.getCamera();
     if (ImGui::Button("Iso")) {
@@ -88,25 +131,72 @@ void ViewportPanel::renderToolbar() {
 
     const char* modes[] = {"Shaded", "Wireframe", "Shaded + Wire"};
     int modeIdx = static_cast<int>(m_viewport.getRenderMode());
-    ImGui::SetNextItemWidth(130.0f);
+    ImGui::SetNextItemWidth(120.0f);
     if (ImGui::Combo("##RenderMode", &modeIdx, modes, 3)) {
         m_viewport.setRenderMode(static_cast<RenderMode>(modeIdx));
     }
 
     ImGui::SameLine();
-    ImGui::TextDisabled("| Dist: %.1fm | %.0f FPS", cam.getDistance(), ImGui::GetIO().Framerate);
+    ImGui::TextDisabled("| %.0f FPS", ImGui::GetIO().Framerate);
 
     ImGui::EndChild();
     ImGui::PopStyleVar();
 }
 
-void ViewportPanel::handleCameraInput(bool imageHovered) {
+void ViewportPanel::handleViewportInput(bool imageHovered, const glm::vec2& imageMin, const glm::vec2& imageSize) {
+    ImGuiIO& io = ImGui::GetIO();
+    OrbitCamera& cam = m_viewport.getCamera();
+    Gizmo& gizmo = m_viewport.getGizmo();
+
+    if (imageHovered && !io.WantTextInput) {
+        if (ImGui::IsKeyPressed(ImGuiKey_Q)) {
+            gizmo.setMode(GizmoMode::Select);
+        } else if (ImGui::IsKeyPressed(ImGuiKey_W)) {
+            gizmo.setMode(GizmoMode::Translate);
+        } else if (ImGui::IsKeyPressed(ImGuiKey_E)) {
+            gizmo.setMode(GizmoMode::SectionHandle);
+        }
+    }
+
+    if (imageSize.x <= 1.0f || imageSize.y <= 1.0f) {
+        return;
+    }
+
+    const float ndcX = 2.0f * (io.MousePos.x - imageMin.x) / imageSize.x - 1.0f;
+    const float ndcY = 1.0f - 2.0f * (io.MousePos.y - imageMin.y) / imageSize.y;
+    const float aspect = imageSize.x / imageSize.y;
+    const Ray ray = cam.screenPointToRay(ndcX, ndcY, aspect);
+
+    if (gizmo.isDragging()) {
+        if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            gizmo.updateDrag(ray, m_aircraft);
+        } else {
+            gizmo.endDrag();
+        }
+        return;
+    }
+
     if (!imageHovered) {
         return;
     }
 
-    ImGuiIO& io = ImGui::GetIO();
-    OrbitCamera& cam = m_viewport.getCamera();
+    gizmo.updateHover(ray, m_aircraft, cam);
+
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyAlt) {
+        if (!gizmo.beginDrag(ray, m_aircraft, cam)) {
+            const PickResult pick = RayPicker::pickAircraft(ray, m_aircraft);
+            if (pick.hit) {
+                m_aircraft.setSelectedComponentId(pick.componentId);
+                if (pick.crossSectionIndex.has_value()) {
+                    if (auto* wing = dynamic_cast<Wing*>(m_aircraft.findComponent(pick.componentId))) {
+                        wing->setSelectedCrossSection(*pick.crossSectionIndex);
+                    }
+                }
+            } else {
+                m_aircraft.setSelectedComponentId(std::nullopt);
+            }
+        }
+    }
 
     if (io.MouseWheel != 0.0f) {
         cam.zoom(io.MouseWheel);

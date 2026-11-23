@@ -15,6 +15,11 @@ enum class ViewPreset {
     Left
 };
 
+struct Ray {
+    glm::vec3 origin{0.0f, 0.0f, 0.0f};
+    glm::vec3 direction{1.0f, 0.0f, 0.0f};
+};
+
 /// CAD-style Z-up spherical orbit camera (X aft, Y starboard, Z up).
 class OrbitCamera {
 public:
@@ -34,6 +39,8 @@ public:
 
     glm::mat4 getViewMatrix() const noexcept;
     glm::mat4 getProjectionMatrix(float aspectRatio) const noexcept;
+    /// Builds a world-space picking ray from normalized viewport coordinates in [-1, 1].
+    Ray screenPointToRay(float ndcX, float ndcY, float aspectRatio) const noexcept;
 
     const glm::vec3& getTarget() const noexcept;
     float getDistance() const noexcept;

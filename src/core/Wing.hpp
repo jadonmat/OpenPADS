@@ -53,6 +53,9 @@ public:
     /// Accesses cross-section index (0 = root, i+1 = tip of bay i).
     std::size_t getSelectedCrossSection() const noexcept;
     void setSelectedCrossSection(std::size_t xsecIndex) noexcept;
+    glm::vec3 getCrossSectionLeadingEdge(std::size_t xsecIndex) const noexcept;
+    /// Updates span, sweep, and dihedral of bay (xsecIndex - 1) from a new local tip LE position.
+    void moveCrossSectionLeadingEdge(std::size_t xsecIndex, const glm::vec3& newLocalTipLE);
 
     /// Geometric & aerodynamic reference metrics (including symmetry when XZ is active).
     double getPlanformArea() const noexcept;

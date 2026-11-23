@@ -8,7 +8,9 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 #include <imgui_internal.h>
+#include <implot.h>
 
+#include "ui/AirfoilEditorPanel.hpp"
 #include "ui/InspectorPanel.hpp"
 #include "ui/ModelTreePanel.hpp"
 #include "ui/ViewportPanel.hpp"
@@ -56,6 +58,7 @@ bool Application::initialize() {
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
+    ImPlot::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
@@ -67,6 +70,7 @@ bool Application::initialize() {
 
     m_panels.push_back(std::make_unique<ModelTreePanel>(m_aircraft));
     m_panels.push_back(std::make_unique<ViewportPanel>(m_aircraft, m_viewport));
+    m_panels.push_back(std::make_unique<AirfoilEditorPanel>(m_aircraft));
     m_panels.push_back(std::make_unique<InspectorPanel>(m_aircraft));
 
     return true;
@@ -111,6 +115,7 @@ void Application::shutdown() {
     if (ImGui::GetCurrentContext() != nullptr) {
         ImGui_ImplOpenGL3_Shutdown();
         ImGui_ImplGlfw_Shutdown();
+        ImPlot::DestroyContext();
         ImGui::DestroyContext();
     }
 
@@ -246,6 +251,7 @@ void Application::buildDefaultDockLayout(unsigned int dockspaceId) {
 
     ImGui::DockBuilderDockWindow("Model Tree", leftId);
     ImGui::DockBuilderDockWindow("3D Viewport", centerId);
+    ImGui::DockBuilderDockWindow("Airfoil Editor", centerId);
     ImGui::DockBuilderDockWindow("Inspector", rightId);
     ImGui::DockBuilderFinish(dockspaceId);
 }

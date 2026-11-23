@@ -357,6 +357,39 @@ void Wing::setSelectedCrossSection(std::size_t xsecIndex) noexcept {
     m_selectedCrossSection = std::min(xsecIndex, m_sections.size());
 }
 
+glm::vec3 Wing::getCrossSectionLeadingEdge(std::size_t xsecIndex) const noexcept {
+    glm::vec3 le(0.0f, 0.0f, 0.0f);
+    const std::size_t clamped = std::min(xsecIndex, m_sections.size());
+    for (std::size_t i = 0; i < clamped; ++i) {
+        le = m_sections[i].computeTipLeadingEdge(le);
+    }
+    return le;
+}
+
+void Wing::moveCrossSectionLeadingEdge(std::size_t xsecIndex, const glm::vec3& newLocalTipLE) {
+    if (xsecIndex == 0 || xsecIndex > m_sections.size()) {
+        return;
+    }
+    const std::size_t bayIndex = xsecIndex - 1;
+    const glm::vec3 rootLE = getCrossSectionLeadingEdge(bayIndex);
+    const glm::vec3 delta = newLocalTipLE - rootLE;
+
+    const float newSpan = std::max(0.05f, std::sqrt(delta.y * delta.y + delta.z * delta.z));
+    const float newDihedralDeg = std::clamp(glm::degrees(std::atan2(delta.z, std::max(delta.y, 1e-4f))), -89.0f, 90.0f);
+
+    WingSection& bay = m_sections[bayIndex];
+    const float f = bay.sweepLocation().getFloat();
+    const float cr = bay.rootChord().getFloat();
+    const float ct = bay.tipChord().getFloat();
+    const float sweepNumerator = delta.x - f * (cr - ct);
+    const float newSweepDeg = std::clamp(glm::degrees(std::atan2(sweepNumerator, newSpan)), -75.0f, 75.0f);
+
+    bay.span().setFloat(newSpan);
+    bay.dihedralDeg().setFloat(newDihedralDeg);
+    bay.sweepDeg().setFloat(newSweepDeg);
+    markDirty();
+}
+
 double Wing::getPlanformArea() const noexcept {
     double area = 0.0;
     for (const WingSection& bay : m_sections) {

@@ -12,7 +12,8 @@ namespace opads {
 enum class AirfoilType {
     Naca4,
     Naca5,
-    DatFile
+    DatFile,
+    Cst
 };
 
 /// 2D parametric and coordinate-based airfoil generator (NACA 4/5-digit + Selig/Lednicer .dat).
@@ -25,9 +26,17 @@ public:
 
     bool loadFromDatFile(const std::filesystem::path& path);
     bool loadFromDatString(std::string_view contents, std::string fallbackName = "Custom Airfoil");
+    bool saveToDatFile(const std::filesystem::path& path) const;
 
     void setNaca4(std::string_view code);
     void setNaca5(std::string_view code);
+    void setCst(std::vector<double> upperWeights, std::vector<double> lowerWeights, std::string name = "CST Airfoil");
+    void convertToCst(int order = 4);
+
+    const std::vector<double>& getCstUpperWeights() const noexcept;
+    const std::vector<double>& getCstLowerWeights() const noexcept;
+    void setCstUpperWeight(std::size_t index, double value);
+    void setCstLowerWeight(std::size_t index, double value);
 
     AirfoilType getType() const noexcept;
     const std::string& getName() const noexcept;
@@ -69,6 +78,7 @@ private:
     void rebuild();
     void generateNaca4();
     void generateNaca5();
+    void generateCst();
     void resampleFromRawDat();
     void buildLoopAndMetrics();
 
@@ -86,6 +96,8 @@ private:
 
     std::vector<glm::vec2> m_rawDatUpper;
     std::vector<glm::vec2> m_rawDatLower;
+    std::vector<double> m_cstUpper{0.17, 0.16, 0.14, 0.15, 0.13};
+    std::vector<double> m_cstLower{-0.14, -0.10, -0.09, -0.07, -0.05};
 
     std::vector<glm::vec2> m_upper;
     std::vector<glm::vec2> m_lower;

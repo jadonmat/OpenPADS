@@ -4,6 +4,7 @@
 #include <unordered_map>
 
 #include "core/Aircraft.hpp"
+#include "render/Gizmo.hpp"
 #include "render/GridRenderer.hpp"
 #include "render/MeshBuffer.hpp"
 #include "render/OrbitCamera.hpp"
@@ -37,6 +38,9 @@ public:
     OrbitCamera& getCamera() noexcept;
     const OrbitCamera& getCamera() const noexcept;
 
+    Gizmo& getGizmo() noexcept;
+    const Gizmo& getGizmo() const noexcept;
+
     RenderMode getRenderMode() const noexcept;
     void setRenderMode(RenderMode mode) noexcept;
 
@@ -62,6 +66,7 @@ private:
 
     OrbitCamera m_camera;
     GridRenderer m_gridRenderer;
+    Gizmo m_gizmo;
     Shader m_surfaceShader;
     Shader m_highlightShader;
     std::unordered_map<std::uint64_t, MeshBuffer> m_componentBuffers;

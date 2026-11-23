@@ -50,7 +50,14 @@ FetchContent_Declare(
     GIT_SHALLOW    TRUE
 )
 
-FetchContent_MakeAvailable(glfw glm glad imgui)
+FetchContent_Declare(
+    implot
+    GIT_REPOSITORY https://github.com/epezent/implot.git
+    GIT_TAG        v0.16
+    GIT_SHALLOW    TRUE
+)
+
+FetchContent_MakeAvailable(glfw glm glad imgui implot)
 
 glad_add_library(glad_gl_core_45 STATIC API gl:core=4.5)
 
@@ -62,10 +69,13 @@ add_library(imgui STATIC
     ${imgui_SOURCE_DIR}/imgui_widgets.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
+    ${implot_SOURCE_DIR}/implot.cpp
+    ${implot_SOURCE_DIR}/implot_items.cpp
 )
 target_include_directories(imgui PUBLIC
     ${imgui_SOURCE_DIR}
     ${imgui_SOURCE_DIR}/backends
+    ${implot_SOURCE_DIR}
 )
 target_link_libraries(imgui PUBLIC glfw OpenGL::GL)
 
@@ -100,6 +110,10 @@ target_compile_definitions(OpenPADS_Core PUBLIC OPENPADS_DATA_DIR="${CMAKE_CURRE
 add_library(OpenPADS_Render STATIC
     src/render/OrbitCamera.hpp
     src/render/OrbitCamera.cpp
+    src/render/RayPicker.hpp
+    src/render/RayPicker.cpp
+    src/render/Gizmo.hpp
+    src/render/Gizmo.cpp
     src/render/Shader.hpp
     src/render/Shader.cpp
     src/render/MeshBuffer.hpp
@@ -127,6 +141,8 @@ add_library(OpenPADS_UI STATIC
     src/ui/ModelTreePanel.cpp
     src/ui/InspectorPanel.hpp
     src/ui/InspectorPanel.cpp
+    src/ui/AirfoilEditorPanel.hpp
+    src/ui/AirfoilEditorPanel.cpp
     src/ui/ViewportPanel.hpp
     src/ui/ViewportPanel.cpp
     src/ui/Application.hpp
@@ -178,6 +194,7 @@ if (OPENPADS_BUILD_TESTS)
     )
     target_link_libraries(OpenPADS_Tests PRIVATE
         OpenPADS_Core
+        OpenPADS_Render
         Catch2::Catch2WithMain
     )
     add_test(NAME OpenPADS_CoreTests COMMAND OpenPADS_Tests)

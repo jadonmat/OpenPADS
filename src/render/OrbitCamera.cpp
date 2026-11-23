@@ -105,6 +105,21 @@ glm::mat4 OrbitCamera::getProjectionMatrix(float aspectRatio) const noexcept {
     return glm::perspective(glm::radians(m_fovDeg), safeAspect, m_nearPlane, m_farPlane);
 }
 
+Ray OrbitCamera::screenPointToRay(float ndcX, float ndcY, float aspectRatio) const noexcept {
+    const glm::mat4 invViewProj = glm::inverse(getProjectionMatrix(aspectRatio) * getViewMatrix());
+    const glm::vec4 nearClip(ndcX, ndcY, -1.0f, 1.0f);
+    const glm::vec4 farClip(ndcX, ndcY, 1.0f, 1.0f);
+
+    glm::vec4 nearWorld = invViewProj * nearClip;
+    glm::vec4 farWorld = invViewProj * farClip;
+    nearWorld /= nearWorld.w;
+    farWorld /= farWorld.w;
+
+    const glm::vec3 origin(nearWorld);
+    const glm::vec3 dir = glm::normalize(glm::vec3(farWorld) - origin);
+    return Ray{origin, dir};
+}
+
 const glm::vec3& OrbitCamera::getTarget() const noexcept {
     return m_target;
 }
